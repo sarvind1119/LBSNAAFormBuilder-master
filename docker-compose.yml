@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: lbsnaa
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - lbsnaa-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d lbsnaa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: "azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck"
+    ports:
+      - "10000:10000"
+    volumes:
+      - lbsnaa-azurite:/data
+    restart: unless-stopped
+
+  lbsnaa-forms:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - ADMIN_PASSWORD=admin
+      - SECRET_KEY=dev-secret-change-this
+      - DATABASE_URL=postgresql://admin:testpass@db:5432/lbsnaa
+      # Azurite emulator connection string (well-known dev account).
+      # Replace with a real Azure connection string for production.
+      - AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+      - BLOB_CONTAINER_NAME=uploads
+      # Set secrets in a .env file (never commit secrets!)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # SMTP config for email notifications (set in .env file)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-noreply@lbsnaa.gov.in}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-LBSNAA Form Builder}
+      - BASE_URL=${BASE_URL:-http://localhost:5000}
+    depends_on:
+      db:
+        condition: service_healthy
+      azurite:
+        condition: service_started
+    volumes:
+      - lbsnaa-temp:/app/temp_uploads
+      - ./models:/app/models:ro
+      - ./celebrity_reference:/app/celebrity_reference:ro
+    restart: unless-stopped
+
+volumes:
+  lbsnaa-pgdata:
+  lbsnaa-azurite:
+  lbsnaa-temp:

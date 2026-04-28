@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(az --version 2>&1)",
+      "PowerShell(az account show --query \"{subscription:name, id:id, tenant:tenantId, user:user.name}\" -o table 2>&1)",
+      "PowerShell($suffix = -join \\(\\(97..122\\) + \\(48..57\\) | Get-Random -Count 5 | ForEach-Object {[char]$_}\\); Write-Output \"SUFFIX=$suffix\")",
+      "PowerShell(az webapp list --query \"[?name=='lbsnaa-form-prod-yh3rx']\" -o json; Write-Output \"---DNS-CHECK---\"; try { [System.Net.Dns]::GetHostAddresses\\(\"lbsnaa-form-prod-yh3rx.azurewebsites.net\"\\) | Out-Null; Write-Output \"TAKEN\" } catch { Write-Output \"AVAILABLE\" })"
+    ]
+  }
+}
