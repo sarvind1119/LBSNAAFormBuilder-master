@@ -114,4 +114,4 @@ Thumbs.db
 # Project specific
 data/
 temp_uploads/
-models/
+# models/ intentionally tracked — needed for Docker image build in CI
