@@ -47,13 +47,12 @@
         <!-- Form Fields -->
         <div class="bg-white rounded-xl shadow-sm border p-6">
             <h3 class="text-lg font-medium text-gray-900 mb-4">Form Fields</h3>
-            <p class="text-sm text-gray-500 mb-4">Toggle which fields appear on the registration form. Name and Email are always required.</p>
+            <p class="text-sm text-gray-500 mb-4">Toggle which fields appear on the registration form, and edit their labels as participants will see them. Name and Email are always required, but their labels can still be customised.</p>
 
             <div class="space-y-3" id="defaultFields">
                 {% for field in fields_config.default_fields %}
                 <div class="flex items-center gap-4 p-3 rounded-lg border {% if field.get('locked') %}bg-gray-50{% else %}bg-white{% endif %}">
                     <input type="hidden" name="default_field_keys" value="{{ field.key }}">
-                    <input type="hidden" name="field_label_{{ field.key }}" value="{{ field.label }}">
                     <input type="hidden" name="field_type_{{ field.key }}" value="{{ field.type }}">
                     {% if field.type == 'select' %}
                     <input type="hidden" name="field_options_{{ field.key }}" value="{{ field.get('options', [])|join(', ') }}">
@@ -62,22 +61,29 @@
                     {% endif %}
 
                     <!-- Enabled checkbox -->
-                    <label class="flex items-center gap-2 min-w-[200px]">
+                    <label class="flex items-center gap-2 shrink-0">
                         {% if field.get('locked') %}
                             <input type="hidden" name="field_enabled_{{ field.key }}" value="1">
                             <input type="checkbox" checked disabled class="h-4 w-4 text-accent-600 rounded">
-                            <span class="text-sm font-medium text-gray-700">{{ field.label }}</span>
-                            <span class="text-xs text-gray-400">(always on)</span>
                         {% else %}
                             <input type="checkbox" name="field_enabled_{{ field.key }}" value="1"
                                    {% if field.enabled %}checked{% endif %}
                                    class="h-4 w-4 text-accent-600 rounded">
-                            <span class="text-sm font-medium text-gray-700">{{ field.label }}</span>
                         {% endif %}
                     </label>
 
+                    <!-- Editable label -->
+                    <div class="flex-1 min-w-0">
+                        <input type="text" name="field_label_{{ field.key }}" value="{{ field.label }}" required
+                               class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm font-medium text-gray-700 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"
+                               placeholder="Field label as shown to participants">
+                        <p class="text-xs text-gray-400 mt-1">
+                            key: <code class="font-mono">{{ field.key }}</code>{% if field.get('locked') %} &middot; always on{% endif %}
+                        </p>
+                    </div>
+
                     <!-- Required checkbox -->
-                    <label class="flex items-center gap-1 text-sm text-gray-500">
+                    <label class="flex items-center gap-1 text-sm text-gray-500 shrink-0">
                         {% if field.get('locked') %}
                             <input type="hidden" name="field_required_{{ field.key }}" value="1">
                             <input type="checkbox" checked disabled class="h-3.5 w-3.5 rounded">
@@ -90,7 +96,7 @@
                         {% endif %}
                     </label>
 
-                    <span class="text-xs text-gray-400 ml-auto">{{ 'dropdown (grouped)' if field.type == 'grouped_select' else field.type }}</span>
+                    <span class="text-xs text-gray-400 shrink-0">{{ 'dropdown (grouped)' if field.type == 'grouped_select' else field.type }}</span>
                 </div>
                 {% endfor %}
             </div>
