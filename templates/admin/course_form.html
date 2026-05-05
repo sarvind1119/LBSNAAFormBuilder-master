@@ -113,6 +113,8 @@
                             <option value="text" {% if field.type == 'text' %}selected{% endif %}>Text</option>
                             <option value="email" {% if field.type == 'email' %}selected{% endif %}>Email</option>
                             <option value="tel" {% if field.type == 'tel' %}selected{% endif %}>Phone</option>
+                            <option value="date" {% if field.type == 'date' %}selected{% endif %}>Date</option>
+                            <option value="time" {% if field.type == 'time' %}selected{% endif %}>Time</option>
                             <option value="textarea" {% if field.type == 'textarea' %}selected{% endif %}>Textarea</option>
                             <option value="select" {% if field.type == 'select' %}selected{% endif %}>Dropdown</option>
                         </select>

@@ -47,6 +47,8 @@
                         <option value="text">Text</option>
                         <option value="email">Email</option>
                         <option value="tel">Phone</option>
+                        <option value="date">Date</option>
+                        <option value="time">Time</option>
                         <option value="textarea">Textarea</option>
                         <option value="select">Dropdown</option>
                     </select>

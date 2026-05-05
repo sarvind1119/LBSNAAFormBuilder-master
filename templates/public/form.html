@@ -80,6 +80,11 @@
                                {% if field.type == 'tel' %}pattern="[0-9]{10}" maxlength="10" placeholder="10-digit number"{% endif %}
                                class="form-field w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
                     {% endif %}
+                    {% if field.type == 'date' %}
+                        <p class="text-xs text-gray-400 mt-1">Format: dd-mm-yyyy</p>
+                    {% elif field.type == 'time' %}
+                        <p class="text-xs text-gray-400 mt-1">Format: hh:mm (am/pm)</p>
+                    {% endif %}
                     <p class="field-error text-xs text-red-600 mt-1 hidden" data-error="{{ field.key }}"></p>
                 </div>
                 {% endfor %}
