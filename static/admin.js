@@ -64,6 +64,21 @@
             });
         }
 
+        // User form: show/hide the course access section based on role
+        const roleSelect = document.getElementById('role');
+        const accessSection = document.getElementById('courseAccessSection');
+        if (roleSelect && accessSection) {
+            const sync = () => {
+                if (roleSelect.value === 'admin') {
+                    accessSection.classList.add('hidden');
+                } else {
+                    accessSection.classList.remove('hidden');
+                }
+            };
+            roleSelect.addEventListener('change', sync);
+            sync();
+        }
+
         // Before form submit: re-index all custom field required checkboxes
         if (form) {
             form.addEventListener('submit', () => {

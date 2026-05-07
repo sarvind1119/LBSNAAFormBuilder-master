@@ -39,7 +39,9 @@ from database import (
     create_user, update_user_role, update_user_password, delete_user,
     create_notification, get_notification_by_token, mark_notification_sent,
     mark_notification_failed, mark_token_used, get_notifications_for_submission,
-    get_notifications_for_course, save_reupload_log, update_submission_doc
+    get_notifications_for_course, save_reupload_log, update_submission_doc,
+    get_user_course_access, get_accessible_course_ids,
+    set_user_course_access, clear_user_course_access,
 )
 from email_service import send_notification_email, is_configured as smtp_configured
 
@@ -168,6 +170,34 @@ def require_admin(f):
             return redirect(url_for('admin_dashboard'))
         return f(*args, **kwargs)
     return decorated
+
+
+# ============================================================================
+# PER-COURSE ACCESS HELPERS
+# ============================================================================
+
+def is_global_admin():
+    return session.get('user_role') == 'admin'
+
+
+def can_view_course(course_id):
+    """True if current session user can view this course."""
+    if is_global_admin():
+        return True
+    user_id = session.get('user_id')
+    if not user_id:
+        return False
+    return course_id in get_accessible_course_ids(user_id, min_level='viewer')
+
+
+def can_manage_course(course_id):
+    """True if current session user can manage submissions on this course."""
+    if is_global_admin():
+        return True
+    user_id = session.get('user_id')
+    if not user_id:
+        return False
+    return course_id in get_accessible_course_ids(user_id, min_level='manager')
 
 
 # ============================================================================
@@ -308,6 +338,9 @@ def admin_logout():
 @require_login
 def admin_dashboard():
     courses = get_all_courses()
+    if not is_global_admin():
+        accessible = get_accessible_course_ids(session['user_id'], min_level='viewer')
+        courses = [c for c in courses if c['id'] in accessible]
     return render_template('admin/dashboard.html', courses=courses)
 
 
@@ -463,6 +496,8 @@ def admin_submissions(course_id):
     course = get_course_by_id(course_id)
     if not course:
         abort(404)
+    if not can_view_course(course_id):
+        abort(403)
     submissions = get_submissions_by_course(course_id)
 
     enabled_fields = []
@@ -493,25 +528,23 @@ def admin_submissions(course_id):
                            enabled_fields=enabled_fields,
                            enabled_docs=enabled_docs,
                            notification_map=notification_map,
-                           smtp_configured=smtp_configured())
+                           smtp_configured=smtp_configured(),
+                           can_manage=can_manage_course(course_id))
 
 
 @app.route('/admin/submission/<int:submission_id>/delete', methods=['POST'])
-@require_admin
+@require_login
 def admin_submission_delete(submission_id):
-    from database import get_conn
-    conn = get_conn()
-    try:
-        row = conn.execute("SELECT course_id FROM submissions WHERE id = ?", (submission_id,)).fetchone()
-        course_id = row['course_id'] if row else None
-    finally:
-        conn.close()
+    sub = get_submission_by_id(submission_id)
+    if not sub:
+        abort(404)
+    course_id = sub['course_id']
+    if not can_manage_course(course_id):
+        abort(403)
 
     delete_submission(submission_id)
     flash('Submission deleted.', 'success')
-    if course_id:
-        return redirect(url_for('admin_submissions', course_id=course_id))
-    return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('admin_submissions', course_id=course_id))
 
 
 # ============================================================================
@@ -529,6 +562,8 @@ def admin_download_file(submission_id, doc_type):
     sub = get_submission_by_id(submission_id)
     if not sub:
         abort(404)
+    if not can_view_course(sub['course_id']):
+        abort(403)
 
     file_key = sub.get(f'{doc_type.lower()}_file')
     if not file_key:
@@ -552,12 +587,14 @@ def admin_download_file(submission_id, doc_type):
 # ============================================================================
 
 @app.route('/admin/submission/<int:submission_id>/flag-notify', methods=['POST'])
-@require_admin
+@require_login
 def admin_flag_notify(submission_id):
     """Admin flags a document and sends re-upload notification email."""
     sub = get_submission_by_id(submission_id)
     if not sub:
         return jsonify({'status': 'error', 'message': 'Submission not found'}), 404
+    if not can_manage_course(sub['course_id']):
+        return jsonify({'status': 'error', 'message': 'Forbidden'}), 403
 
     data = request.get_json(silent=True)
     if not data:
@@ -722,6 +759,11 @@ def admin_bulk_flag_notify():
 @require_login
 def admin_submission_notifications(submission_id):
     """Return notification history for a submission (audit trail)."""
+    sub = get_submission_by_id(submission_id)
+    if not sub:
+        return jsonify({'status': 'error', 'message': 'Submission not found'}), 404
+    if not can_view_course(sub['course_id']):
+        return jsonify({'status': 'error', 'message': 'Forbidden'}), 403
     notifications = get_notifications_for_submission(submission_id)
     return jsonify({'status': 'success', 'notifications': notifications})
 
@@ -865,6 +907,8 @@ def admin_export_csv(course_id):
     course = get_course_by_id(course_id)
     if not course:
         abort(404)
+    if not can_view_course(course_id):
+        abort(403)
     submissions = get_submissions_by_course(course_id)
 
     # Build column list
@@ -937,6 +981,21 @@ def admin_users():
     return render_template('admin/users.html', users=users)
 
 
+def _apply_course_access_from_form(user_id, role):
+    """
+    Read course_access_<id> form fields and reconcile user_course_access rows.
+    Admins get an empty access table (they don't need rows). Per-course users
+    get exactly the rows the form selected.
+    """
+    clear_user_course_access(user_id)
+    if role == 'admin':
+        return
+    for course in get_all_courses():
+        choice = request.form.get(f'course_access_{course["id"]}', 'none')
+        if choice in ('manager', 'viewer'):
+            set_user_course_access(user_id, course['id'], choice)
+
+
 @app.route('/admin/users/new', methods=['GET', 'POST'])
 @require_admin
 def admin_user_new():
@@ -950,16 +1009,22 @@ def admin_user_new():
         if role not in ('admin', 'viewer'):
             role = 'viewer'
         try:
-            create_user(username, generate_password_hash(password), role, created_by=session.get('user_id'))
+            new_id = create_user(username, generate_password_hash(password), role, created_by=session.get('user_id'))
+            _apply_course_access_from_form(new_id, role)
             flash(f'User "{username}" created.', 'success')
             return redirect(url_for('admin_users'))
         except Exception as e:
-            if 'UNIQUE constraint' in str(e):
+            if 'UNIQUE constraint' in str(e) or 'duplicate key' in str(e).lower():
                 flash('Username already exists.', 'error')
             else:
                 flash(f'Error: {e}', 'error')
             return redirect(request.url)
-    return render_template('admin/user_form.html', user=None)
+    return render_template(
+        'admin/user_form.html',
+        user=None,
+        courses=get_all_courses(),
+        access_map={},
+    )
 
 
 @app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
@@ -976,12 +1041,19 @@ def admin_user_edit(user_id):
         update_user_role(user_id, new_role)
         if new_password:
             update_user_password(user_id, generate_password_hash(new_password))
+        _apply_course_access_from_form(user_id, new_role)
         # If user edited their own role, update session
         if user_id == session.get('user_id'):
             session['user_role'] = new_role
         flash(f'User "{user["username"]}" updated.', 'success')
         return redirect(url_for('admin_users'))
-    return render_template('admin/user_form.html', user=user)
+    access_map = {row['course_id']: row['role'] for row in get_user_course_access(user_id)}
+    return render_template(
+        'admin/user_form.html',
+        user=user,
+        courses=get_all_courses(),
+        access_map=access_map,
+    )
 
 
 @app.route('/admin/users/<int:user_id>/delete', methods=['POST'])

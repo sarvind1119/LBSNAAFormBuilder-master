@@ -29,7 +29,7 @@
         <p class="text-sm text-gray-500">{{ submissions|length }} submission{{ 's' if submissions|length != 1 else '' }}</p>
     </div>
     <div class="flex items-center gap-3">
-        {% if current_user and current_user.role == 'admin' and smtp_configured %}
+        {% if can_manage and smtp_configured %}
         <button id="bulkNotifyBtn" onclick="openBulkFlagModal()" class="hidden bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition">
             Bulk Flag & Notify (<span id="bulkCount">0</span>)
         </button>
@@ -47,7 +47,7 @@
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
-                    {% if current_user and current_user.role == 'admin' and smtp_configured %}
+                    {% if can_manage and smtp_configured %}
                     <th class="px-3 py-3 text-center">
                         <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" class="rounded border-gray-300">
                     </th>
@@ -66,7 +66,7 @@
             <tbody class="divide-y divide-gray-200">
                 {% for sub in submissions %}
                 <tr class="hover:bg-gray-50 cursor-pointer submission-row" data-id="{{ sub.id }}">
-                    {% if current_user and current_user.role == 'admin' and smtp_configured %}
+                    {% if can_manage and smtp_configured %}
                     <td class="px-3 py-3 text-center" onclick="event.stopPropagation()">
                         <input type="checkbox" class="bulk-check rounded border-gray-300" data-submission-id="{{ sub.id }}" onchange="updateBulkCount()">
                     </td>
@@ -97,7 +97,7 @@
                             </span>
                         {% endif %}
                         {# Flag & Notify button - available on ALL uploaded documents #}
-                        {% if val is not none and current_user and current_user.role == 'admin' and smtp_configured %}
+                        {% if val is not none and can_manage and smtp_configured %}
                         <button type="button"
                                 class="flag-notify-btn text-xs text-orange-600 hover:text-orange-800 ml-1 font-medium"
                                 data-submission-id="{{ sub.id }}"
@@ -134,7 +134,7 @@
                     </td>
                     {% endfor %}
                     <td class="px-4 py-3 text-center">
-                        {% if current_user and current_user.role == 'admin' %}
+                        {% if can_manage %}
                         <form method="POST" action="{{ url_for('admin_submission_delete', submission_id=sub.id) }}" class="inline"
                               onsubmit="return confirm('Delete this submission?')">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

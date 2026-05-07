@@ -133,6 +133,22 @@ def init_db():
                     ON reupload_log(notification_id)
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_course_access (
+                    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                    role      TEXT NOT NULL CHECK(role IN ('manager', 'viewer')),
+                    PRIMARY KEY (user_id, course_id)
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
             # Seed default admin user if no users exist
             cur.execute("SELECT COUNT(*) AS cnt FROM users")
             user_count = cur.fetchone()["cnt"]
@@ -144,8 +160,27 @@ def init_db():
                 )
                 logger.info("Created default admin user (username: admin)")
 
+            # One-time auto-grant: every existing global viewer gets per-course
+            # viewer rows for every existing course, so legacy viewers keep
+            # working unchanged. Gated by app_meta marker so revocations stick.
+            cur.execute("SELECT 1 FROM app_meta WHERE key = 'viewer_auto_grant_done'")
+            if cur.fetchone() is None:
+                cur.execute("""
+                    INSERT INTO user_course_access (user_id, course_id, role)
+                    SELECT u.id, c.id, 'viewer'
+                    FROM users u CROSS JOIN courses c
+                    WHERE u.role = 'viewer'
+                    ON CONFLICT (user_id, course_id) DO NOTHING
+                """)
+                granted = cur.rowcount
+                cur.execute(
+                    "INSERT INTO app_meta (key, value) VALUES (%s, %s)",
+                    ('viewer_auto_grant_done', datetime.utcnow().isoformat())
+                )
+                logger.info(f"Auto-granted view access to {granted} (viewer, course) pair(s)")
+
         conn.commit()
-        logger.info("Database initialized: courses + submissions + users tables ready")
+        logger.info("Database initialized: courses + submissions + users + user_course_access tables ready")
     finally:
         conn.close()
 
@@ -773,5 +808,95 @@ def update_submission_doc(submission_id, doc_type, valid, result, file_key):
             )
         conn.commit()
         logger.info(f"Updated submission={submission_id} doc={doc_type} valid={valid}")
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# USER-COURSE ACCESS CRUD
+# ============================================================================
+
+def get_user_course_access(user_id):
+    """Return list of {course_id, role} rows for a user."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT course_id, role FROM user_course_access WHERE user_id = %s",
+                (user_id,)
+            )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_accessible_course_ids(user_id, min_level='viewer'):
+    """
+    Return set of course ids the user can access at the given level.
+    min_level='viewer' -> any row counts (viewer or manager).
+    min_level='manager' -> only manager rows count.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if min_level == 'manager':
+                cur.execute(
+                    "SELECT course_id FROM user_course_access WHERE user_id = %s AND role = 'manager'",
+                    (user_id,)
+                )
+            else:
+                cur.execute(
+                    "SELECT course_id FROM user_course_access WHERE user_id = %s",
+                    (user_id,)
+                )
+            rows = cur.fetchall()
+        return {row["course_id"] for row in rows}
+    finally:
+        conn.close()
+
+
+def set_user_course_access(user_id, course_id, role):
+    """Upsert a (user, course) access row."""
+    if role not in ('manager', 'viewer'):
+        raise ValueError(f"Invalid role: {role}")
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO user_course_access (user_id, course_id, role)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (user_id, course_id) DO UPDATE SET role = EXCLUDED.role""",
+                (user_id, course_id, role)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_user_course_access(user_id, course_id):
+    """Remove a single user-course access row."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_course_access WHERE user_id = %s AND course_id = %s",
+                (user_id, course_id)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_user_course_access(user_id):
+    """Remove all user-course access rows for a user."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_course_access WHERE user_id = %s",
+                (user_id,)
+            )
+        conn.commit()
     finally:
         conn.close()
