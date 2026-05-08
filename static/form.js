@@ -269,26 +269,36 @@
 
         const fieldsValid = validateFields();
 
-        // Check all required docs are accepted
-        let docsValid = true;
-        let docHint = '';
+        // Required docs only need a file uploaded; ML validation result is
+        // recorded for admin review but does not block submission.
+        let docsUploaded = true;
+        let missingHint = '';
+        let anyInvalid = false;
         ENABLED_DOCS.forEach(doc => {
-            if (doc.required) {
-                const r = docResults[doc.type];
-                if (!r || !r.valid) {
-                    docsValid = false;
-                    docHint = `${doc.label} must be accepted`;
-                }
+            const r = docResults[doc.type];
+            if (doc.required && !r) {
+                docsUploaded = false;
+                missingHint = `${doc.label} must be uploaded`;
+            } else if (r && !r.valid) {
+                anyInvalid = true;
             }
         });
 
-        const canSubmit = fieldsValid && docsValid;
+        const canSubmit = fieldsValid && docsUploaded;
         btn.disabled = !canSubmit;
+
+        // Reset hint colour each call, then re-apply if needed
+        hint.classList.remove('text-orange-600', 'text-gray-400');
+        hint.classList.add('text-gray-400');
 
         if (!fieldsValid) {
             hint.textContent = 'Fill all required fields';
-        } else if (!docsValid) {
-            hint.textContent = docHint;
+        } else if (!docsUploaded) {
+            hint.textContent = missingHint;
+        } else if (anyInvalid) {
+            hint.textContent = 'Some documents failed validation. You may submit anyway.';
+            hint.classList.remove('text-gray-400');
+            hint.classList.add('text-orange-600');
         } else {
             hint.textContent = '';
         }
