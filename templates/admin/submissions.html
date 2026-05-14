@@ -10,6 +10,14 @@
                class="bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition">
                 Export CSV
             </a>
+            <a href="{{ url_for('admin_download_attachments', course_id=course.id) }}"
+               class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition inline-flex items-center gap-1.5"
+               title="Download a ZIP containing every uploaded document, one folder per participant">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+                </svg>
+                Download Attachments (ZIP)
+            </a>
             <span class="text-sm text-gray-500">{{ current_user.username }}
                 <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium {% if current_user.role == 'admin' %}bg-purple-100 text-purple-700{% else %}bg-gray-100 text-gray-600{% endif %}">{{ current_user.role }}</span>
             </span>

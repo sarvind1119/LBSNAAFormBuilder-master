@@ -10,13 +10,16 @@ import csv
 import re
 import json
 import logging
+import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
-    url_for, session, flash, Response, abort, send_file
+    url_for, session, flash, Response, abort, send_file,
+    after_this_request,
 )
 from flask_cors import CORS
 from flask_wtf.csrf import CSRFProtect
@@ -1057,6 +1060,115 @@ def admin_export_csv(course_id):
         output.getvalue(),
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+
+# Characters disallowed in ZIP folder/file names on Windows + common shells.
+_UNSAFE_NAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitize_folder_name(raw, fallback='Unknown'):
+    """Make a participant name safe to use as a ZIP folder name."""
+    if not raw:
+        return fallback
+    cleaned = _UNSAFE_NAME_CHARS.sub(' ', str(raw))
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip(' .')
+    if not cleaned:
+        return fallback
+    return cleaned[:100]
+
+
+@app.route('/admin/course/<int:course_id>/download-attachments')
+@require_login
+def admin_download_attachments(course_id):
+    """
+    Stream a ZIP of all uploaded documents for this course, organised as
+    one folder per submission (named '<Full Name> (#<id>)') containing
+    one file per uploaded document.
+    """
+    course = get_course_by_id(course_id)
+    if not course:
+        abort(404)
+    if not can_view_course(course_id):
+        abort(403)
+
+    submissions = get_submissions_by_course(course_id)
+
+    enabled_doc_types = [
+        dt for dt in ('PHOTO', 'ID', 'LETTER')
+        if course.get('doc_config', {}).get(dt, {}).get('enabled')
+    ]
+    if not enabled_doc_types:
+        flash('This course has no documents to download.', 'error')
+        return redirect(url_for('admin_submissions', course_id=course_id))
+
+    storage = get_storage()
+
+    # Write the ZIP to a tempfile so memory stays bounded for large courses.
+    tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+    tmp_zip.close()
+    total_files = 0
+
+    try:
+        with zipfile.ZipFile(tmp_zip.name, mode='w', compression=zipfile.ZIP_STORED) as zf:
+            for sub in submissions:
+                form_data = sub.get('form_data') or {}
+                folder_name = f"{_sanitize_folder_name(form_data.get('name'))} (#{sub['id']})"
+
+                included_any = False
+                for doc_type in enabled_doc_types:
+                    file_key = sub.get(f'{doc_type.lower()}_file')
+                    if not file_key:
+                        continue
+                    local_path = storage.get_path(file_key)
+                    if not local_path:
+                        continue
+                    try:
+                        ext = Path(file_key).suffix or '.bin'
+                        arcname = f"{folder_name}/{doc_type}{ext}"
+                        zf.write(local_path, arcname=arcname)
+                        included_any = True
+                        total_files += 1
+                    finally:
+                        try:
+                            os.remove(local_path)
+                        except OSError:
+                            pass
+
+                # If the submission contributed at least one file the folder
+                # already exists; if not, no folder entry is written (per the
+                # "skip totally empty submissions" choice).
+                _ = included_any  # explicit no-op for readability
+    except Exception:
+        try:
+            os.remove(tmp_zip.name)
+        except OSError:
+            pass
+        raise
+
+    if total_files == 0:
+        try:
+            os.remove(tmp_zip.name)
+        except OSError:
+            pass
+        flash('No documents have been uploaded for this course yet.', 'info')
+        return redirect(url_for('admin_submissions', course_id=course_id))
+
+    download_name = f"{course['slug']}-attachments-{datetime.now().strftime('%Y%m%d')}.zip"
+
+    @after_this_request
+    def _cleanup(response):
+        try:
+            os.remove(tmp_zip.name)
+        except OSError:
+            pass
+        return response
+
+    return send_file(
+        tmp_zip.name,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=download_name,
     )
 
 
