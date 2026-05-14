@@ -143,6 +143,23 @@ def init_db():
             """)
 
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS admin_doc_replacement (
+                    id            SERIAL PRIMARY KEY,
+                    submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+                    doc_type      TEXT NOT NULL,
+                    replaced_by   INTEGER REFERENCES users(id),
+                    replaced_at   TEXT NOT NULL,
+                    new_valid     INTEGER,
+                    new_result    JSONB,
+                    new_file      TEXT
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_admin_doc_replacement_submission
+                    ON admin_doc_replacement(submission_id)
+            """)
+
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS app_meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -898,5 +915,32 @@ def clear_user_course_access(user_id):
                 (user_id,)
             )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# ADMIN DOCUMENT REPLACEMENT LOG
+# ============================================================================
+
+def log_admin_doc_replacement(submission_id, doc_type, replaced_by, new_valid, new_result, new_file):
+    """Record that an admin replaced a document on a submission."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO admin_doc_replacement
+                   (submission_id, doc_type, replaced_by, replaced_at, new_valid, new_result, new_file)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    submission_id, doc_type, replaced_by,
+                    datetime.utcnow().isoformat(),
+                    1 if new_valid else 0,
+                    Json(new_result) if new_result else None,
+                    new_file,
+                )
+            )
+        conn.commit()
+        logger.info(f"Admin replaced doc={doc_type} on submission={submission_id} by user={replaced_by}")
     finally:
         conn.close()

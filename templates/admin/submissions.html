@@ -131,6 +131,19 @@
                             </svg>
                         </a>
                         {% endif %}
+                        {% if can_manage %}
+                        <button type="button"
+                                class="replace-doc-btn inline-block ml-1 text-blue-600 hover:text-blue-800"
+                                title="Replace this document"
+                                data-submission-id="{{ sub.id }}"
+                                data-doc-type="{{ doc.type }}"
+                                data-doc-label="{{ doc.label }}"
+                                onclick="event.stopPropagation(); openReplaceDocModal(this)">
+                            <svg class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                        </button>
+                        {% endif %}
                     </td>
                     {% endfor %}
                     <td class="px-4 py-3 text-center">
@@ -309,8 +322,111 @@
     </div>
 </div>
 
+<!-- Replace Document Modal -->
+<div id="replaceDocModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50" onclick="closeReplaceDocModal()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden" onclick="event.stopPropagation()">
+        <div class="bg-blue-600 px-6 py-4">
+            <h3 class="text-lg font-semibold text-white">Replace Document</h3>
+        </div>
+        <div class="p-6 space-y-4">
+            <p class="text-sm text-gray-600">
+                Upload a replacement file for <span id="replaceDocLabel" class="font-medium text-gray-900"></span>
+                on submission <span id="replaceSubId" class="font-mono"></span>.
+                The current file will be overwritten and the new file will be validated.
+            </p>
+            <div>
+                <label for="replaceDocFile" class="text-sm font-medium text-gray-700">Replacement file</label>
+                <input type="file" id="replaceDocFile" accept=".jpg,.jpeg,.png,.pdf,.webp"
+                       class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                <p class="text-xs text-gray-400 mt-1">JPG, PNG, PDF or WebP. Max 5MB.</p>
+            </div>
+            <div id="replaceStatus" class="hidden text-sm p-3 rounded-lg"></div>
+        </div>
+        <div class="bg-gray-50 px-6 py-4 flex justify-end gap-3">
+            <button onclick="closeReplaceDocModal()" class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-200 rounded-lg transition">Cancel</button>
+            <button id="replaceSendBtn" onclick="sendReplaceDoc()" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition font-medium">
+                Upload Replacement
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 const CSRF_TOKEN = '{{ csrf_token() }}';
+
+// ============================
+// Replace Document Modal
+// ============================
+let replaceSubmissionId = null;
+let replaceDocType = null;
+
+function openReplaceDocModal(btn) {
+    replaceSubmissionId = btn.dataset.submissionId;
+    replaceDocType = btn.dataset.docType;
+    document.getElementById('replaceDocLabel').textContent = btn.dataset.docLabel;
+    document.getElementById('replaceSubId').textContent = '#' + replaceSubmissionId;
+    document.getElementById('replaceDocFile').value = '';
+    const status = document.getElementById('replaceStatus');
+    status.classList.add('hidden');
+    status.textContent = '';
+    document.getElementById('replaceSendBtn').disabled = false;
+    const modal = document.getElementById('replaceDocModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeReplaceDocModal() {
+    const modal = document.getElementById('replaceDocModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+async function sendReplaceDoc() {
+    const fileInput = document.getElementById('replaceDocFile');
+    const status = document.getElementById('replaceStatus');
+    const btn = document.getElementById('replaceSendBtn');
+
+    if (!fileInput.files.length) {
+        status.textContent = 'Please choose a file first.';
+        status.className = 'text-sm p-3 rounded-lg bg-red-100 text-red-700';
+        status.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    status.textContent = 'Uploading and validating...';
+    status.className = 'text-sm p-3 rounded-lg bg-gray-100 text-gray-700';
+    status.classList.remove('hidden');
+
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    fd.append('csrf_token', CSRF_TOKEN);
+
+    try {
+        const url = `/admin/submission/${replaceSubmissionId}/replace-doc/${replaceDocType}`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            body: fd,
+            headers: { 'X-CSRFToken': CSRF_TOKEN },
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === 'success') {
+            const v = data.validation || {};
+            const verdict = v.is_valid ? 'passed validation' : `flagged as ${v.result || 'invalid'}`;
+            status.textContent = `Replaced. New file ${verdict}. Reloading...`;
+            status.className = 'text-sm p-3 rounded-lg bg-green-100 text-green-700';
+            setTimeout(() => { closeReplaceDocModal(); location.reload(); }, 1500);
+        } else {
+            status.textContent = data.message || 'Replace failed.';
+            status.className = 'text-sm p-3 rounded-lg bg-red-100 text-red-700';
+            btn.disabled = false;
+        }
+    } catch (e) {
+        status.textContent = 'Network error: ' + e.message;
+        status.className = 'text-sm p-3 rounded-lg bg-red-100 text-red-700';
+        btn.disabled = false;
+    }
+}
 
 // ============================
 // Image Modal

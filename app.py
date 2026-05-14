@@ -42,6 +42,7 @@ from database import (
     get_notifications_for_course, save_reupload_log, update_submission_doc,
     get_user_course_access, get_accessible_course_ids,
     set_user_course_access, clear_user_course_access,
+    log_admin_doc_replacement,
 )
 from email_service import send_notification_email, is_configured as smtp_configured
 
@@ -679,6 +680,95 @@ def admin_flag_notify(submission_id):
             'message': f'Failed to send email: {str(e)}',
             'notification_id': notif_id
         }), 500
+
+
+@app.route('/admin/submission/<int:submission_id>/replace-doc/<doc_type>', methods=['POST'])
+@require_login
+@require_models
+def admin_replace_doc(submission_id, doc_type):
+    """
+    Admin replaces a document on an existing submission. Mirrors the
+    participant re-upload flow but is gated by can_manage_course and
+    does not require a notification token.
+    """
+    doc_type = doc_type.upper()
+    if doc_type not in VALID_DOC_TYPES:
+        return jsonify({'status': 'error', 'message': 'Invalid document type'}), 400
+
+    sub = get_submission_by_id(submission_id)
+    if not sub:
+        return jsonify({'status': 'error', 'message': 'Submission not found'}), 404
+    if not can_manage_course(sub['course_id']):
+        return jsonify({'status': 'error', 'message': 'Forbidden'}), 403
+
+    course = get_course_by_id(sub['course_id'])
+    if not course:
+        return jsonify({'status': 'error', 'message': 'Course not found'}), 404
+
+    if 'file' not in request.files:
+        return jsonify({'status': 'error', 'message': 'No file provided'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'status': 'error', 'message': 'No file selected'}), 400
+    if not allowed_file(file.filename):
+        return jsonify({'status': 'error', 'message': 'File type not allowed'}), 400
+
+    temp_filepath = save_temp_file(file)
+    if not temp_filepath:
+        return jsonify({'status': 'error', 'message': 'Failed to save file'}), 500
+
+    try:
+        user_name = (sub.get('form_data') or {}).get('name', '')
+        ml_model = ModelManager.get_ml_model()
+        outlier_model = ModelManager.get_outlier_model()
+        result = validate_document(
+            image_path=temp_filepath,
+            expected_type=doc_type,
+            ml_model=ml_model,
+            outlier_model=outlier_model,
+            user_name=user_name
+        )
+
+        storage = get_storage()
+        new_file_key = storage.replace_file(
+            course['slug'], submission_id, doc_type, temp_filepath
+        )
+
+        update_submission_doc(
+            submission_id=submission_id,
+            doc_type=doc_type,
+            valid=result['is_valid'],
+            result=result,
+            file_key=new_file_key,
+        )
+
+        log_admin_doc_replacement(
+            submission_id=submission_id,
+            doc_type=doc_type,
+            replaced_by=session.get('user_id'),
+            new_valid=result['is_valid'],
+            new_result=result,
+            new_file=new_file_key,
+        )
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Document replaced.',
+            'validation': {
+                'is_valid': result['is_valid'],
+                'result': result.get('result'),
+                'confidence': result.get('confidence'),
+                'message': result.get('message'),
+            },
+        })
+    except Exception as e:
+        logger.error(f"admin_replace_doc error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': f'Replace failed: {e}'}), 500
+    finally:
+        try:
+            os.remove(temp_filepath)
+        except OSError:
+            pass
 
 
 @app.route('/admin/submissions/bulk-flag-notify', methods=['POST'])

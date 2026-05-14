@@ -112,7 +112,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Set via environment variable
 
 try:
     from openai import OpenAI
-    _OPENAI_AVAILABLE = OPENAI_API_KEY is not None
+    _OPENAI_AVAILABLE = bool(OPENAI_API_KEY and OPENAI_API_KEY.strip())
     if _OPENAI_AVAILABLE:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
         logger.info("OpenAI client initialized successfully")
