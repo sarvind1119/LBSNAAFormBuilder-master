@@ -9,6 +9,12 @@
     const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
     const ALLOWED_EXTS = ['jpg', 'jpeg', 'png', 'pdf'];
 
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+    }
+
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const uploadPrompt = document.getElementById('uploadPrompt');
@@ -121,20 +127,20 @@
                 ${icon}
                 <div>
                     <p class="font-semibold ${textClass}">${title}</p>
-                    <p class="text-sm text-gray-600 mt-1">${message}</p>
+                    <p class="text-sm text-gray-600 mt-1">${escapeHtml(message)}</p>
                     ${confidence ? `<p class="text-xs text-gray-500 mt-1">Confidence: ${confidence}</p>` : ''}
-                    <p class="text-xs text-gray-400 mt-1">File: ${filename}</p>
+                    <p class="text-xs text-gray-400 mt-1">File: ${escapeHtml(filename)}</p>
                 </div>
             </div>`;
 
         // Name match warning
         if (validation.name_match && validation.name_match.match_status && validation.name_match.match_status !== 'MATCH') {
-            html += `<p class="text-xs text-amber-600 mt-2">Name match: ${validation.name_match.message || validation.name_match.match_status}</p>`;
+            html += `<p class="text-xs text-amber-600 mt-2">Name match: ${escapeHtml(validation.name_match.message || validation.name_match.match_status)}</p>`;
         }
 
         // Celebrity warning
         if (validation.celebrity_warning && validation.celebrity_warning.detected) {
-            html += `<p class="text-xs text-orange-600 mt-2 font-medium">Celebrity detected: ${validation.celebrity_warning.celebrity_name}</p>`;
+            html += `<p class="text-xs text-orange-600 mt-2 font-medium">Celebrity detected: ${escapeHtml(validation.celebrity_warning.celebrity_name)}</p>`;
         }
 
         validationResult.className = `mt-4 p-4 rounded-lg ${bgClass}`;

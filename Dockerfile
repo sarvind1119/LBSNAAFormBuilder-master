@@ -24,6 +24,7 @@ COPY celebrity_detection.py .
 COPY model_manager.py .
 COPY storage.py .
 COPY email_service.py .
+COPY wsgi.py .
 
 # Templates and static files
 COPY templates/ ./templates/
@@ -47,4 +48,6 @@ ENV DATA_DIR=/app/data
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
-CMD ["python", "app.py"]
+# Production server (Flask's built-in server is for local development only).
+# One worker so models are loaded once and the in-memory rate limiter stays consistent.
+CMD exec gunicorn -w 1 --threads 4 --timeout 180 -b 0.0.0.0:${PORT:-5000} wsgi:app

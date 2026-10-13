@@ -9,6 +9,12 @@
     const docFiles = {};     // { PHOTO: File, ... }
     const uploadSessionId = crypto.randomUUID();
 
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+    }
+
     // ========================================================================
     // FIELD VALIDATION
     // ========================================================================
@@ -176,7 +182,7 @@
                         <span class="text-sm font-medium text-green-800">Accepted</span>
                         <span class="text-xs text-green-600 ml-auto">${confidence}% confidence</span>
                     </div>
-                    <p class="text-xs text-green-600 mt-1">${v.message || ''}</p>
+                    <p class="text-xs text-green-600 mt-1">${escapeHtml(v.message || '')}</p>
                 </div>`;
         } else if (v.result === 'SUSPICIOUS') {
             html = `
@@ -186,7 +192,7 @@
                         <span class="text-sm font-medium text-amber-800">Suspicious</span>
                         <span class="text-xs text-amber-600 ml-auto">${confidence}% confidence</span>
                     </div>
-                    <p class="text-xs text-amber-600 mt-1">${v.message || 'Low confidence in document type.'}</p>
+                    <p class="text-xs text-amber-600 mt-1">${escapeHtml(v.message || 'Low confidence in document type.')}</p>
                 </div>`;
         } else {
             // MISMATCH, WRONG, BLANK
@@ -197,7 +203,7 @@
                         <span class="text-red-600 font-bold">&#10007;</span>
                         <span class="text-sm font-medium text-red-800">${label}</span>
                     </div>
-                    <p class="text-xs text-red-600 mt-1">${v.message || ''}</p>
+                    <p class="text-xs text-red-600 mt-1">${escapeHtml(v.message || '')}</p>
                 </div>`;
         }
 
@@ -205,12 +211,12 @@
         if (v.name_match && v.name_match.match_status === 'NO_MATCH') {
             html += `
                 <div class="bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
-                    <p class="text-xs text-amber-700"><strong>Name Mismatch:</strong> ${v.name_match.message || 'Name not found in document.'}</p>
+                    <p class="text-xs text-amber-700"><strong>Name Mismatch:</strong> ${escapeHtml(v.name_match.message || 'Name not found in document.')}</p>
                 </div>`;
         } else if (v.name_match && v.name_match.match_status === 'PARTIAL') {
             html += `
                 <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-2 mt-2">
-                    <p class="text-xs text-yellow-700"><strong>Partial Match:</strong> ${v.name_match.message || ''}</p>
+                    <p class="text-xs text-yellow-700"><strong>Partial Match:</strong> ${escapeHtml(v.name_match.message || '')}</p>
                 </div>`;
         }
 
@@ -218,7 +224,7 @@
         if (v.celebrity_warning && v.celebrity_warning.detected) {
             html += `
                 <div class="bg-orange-50 border border-orange-200 rounded-lg p-2 mt-2">
-                    <p class="text-xs text-orange-700"><strong>Celebrity Detected:</strong> This photo resembles ${v.celebrity_warning.celebrity_name || 'a known celebrity'}.</p>
+                    <p class="text-xs text-orange-700"><strong>Celebrity Detected:</strong> This photo resembles ${escapeHtml(v.celebrity_warning.celebrity_name || 'a known celebrity')}.</p>
                 </div>`;
         }
 
@@ -230,9 +236,9 @@
         resultEl.classList.remove('hidden');
         resultEl.innerHTML = `
             <div class="bg-red-50 border border-red-200 rounded-lg p-3">
-                <p class="text-sm text-red-700">${message}</p>
+                <p class="text-sm text-red-700">${escapeHtml(message)}</p>
             </div>`;
-        docResults[docType] = { valid: false, result: null };
+        delete docResults[docType];
 
         const removeBtn = document.querySelector(`.doc-remove[data-doc-type="${docType}"]`);
         removeBtn.classList.remove('hidden');

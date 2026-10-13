@@ -59,6 +59,11 @@
                class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-3 rounded-lg transition">
                 Edit
             </a>
+            <a href="{{ url_for('admin_course_duplicate', course_id=course.id) }}"
+               title="Create a new course with the same fields and document settings"
+               class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-3 rounded-lg transition">
+                Duplicate
+            </a>
             <form method="POST" action="{{ url_for('admin_course_toggle', course_id=course.id) }}" class="inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit"

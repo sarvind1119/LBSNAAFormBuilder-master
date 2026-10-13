@@ -7,7 +7,7 @@ Reads DATABASE_URL from environment.
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -160,6 +160,17 @@ def init_db():
             """)
 
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS pending_validations (
+                    session_id  TEXT NOT NULL,
+                    doc_type    TEXT NOT NULL,
+                    valid       INTEGER NOT NULL,
+                    result      JSONB,
+                    created_at  TEXT NOT NULL,
+                    PRIMARY KEY (session_id, doc_type)
+                )
+            """)
+
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS app_meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -301,21 +312,59 @@ def get_default_doc_config():
 # COURSE CRUD
 # ============================================================================
 
-def create_course(name, slug, description, fields_config, doc_config):
+def create_course(name, slug, description, fields_config, doc_config, is_active=True):
     """Create a new course. Returns the course id."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO courses (name, slug, description, fields_config, doc_config, is_active, created_at)
-                   VALUES (%s, %s, %s, %s, %s, 1, %s)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
-                (name, slug, description, Json(fields_config), Json(doc_config), datetime.utcnow().isoformat())
+                (name, slug, description, Json(fields_config), Json(doc_config),
+                 1 if is_active else 0, datetime.utcnow().isoformat())
             )
             course_id = cur.fetchone()["id"]
         conn.commit()
         logger.info(f"Created course '{name}' (id={course_id}, slug={slug})")
         return course_id
+    finally:
+        conn.close()
+
+
+def handover_course(source_id, archive_slug, name, description, fields_config, doc_config):
+    """
+    Move the source course to archive_slug (closed) and create a new active
+    course on the source's original slug, in a single transaction, so the
+    public link never points at nothing. Returns the new course id.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT slug FROM courses WHERE id = %s FOR UPDATE", (source_id,))
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Course id={source_id} not found")
+            original_slug = row["slug"]
+            cur.execute(
+                "UPDATE courses SET slug = %s, is_active = 0 WHERE id = %s",
+                (archive_slug, source_id)
+            )
+            cur.execute(
+                """INSERT INTO courses (name, slug, description, fields_config, doc_config, is_active, created_at)
+                   VALUES (%s, %s, %s, %s, %s, 1, %s)
+                   RETURNING id""",
+                (name, original_slug, description, Json(fields_config), Json(doc_config),
+                 datetime.utcnow().isoformat())
+            )
+            new_id = cur.fetchone()["id"]
+        conn.commit()
+        logger.info(f"Handed over slug '{original_slug}' from course id={source_id} "
+                    f"(now '{archive_slug}', closed) to new course id={new_id}")
+        return new_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -461,6 +510,82 @@ def save_submission(course_id, email, form_data, doc_results):
         conn.commit()
         logger.info(f"Saved submission id={sid} for course_id={course_id}, email={email}")
         return sid
+    finally:
+        conn.close()
+
+
+def submission_exists(course_id, email):
+    """True if the course already has a submission for this email (case-insensitive)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM submissions WHERE course_id = %s AND lower(email) = lower(%s) LIMIT 1",
+                (course_id, email)
+            )
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PENDING VALIDATIONS (server-side verdicts between upload and submit)
+# ============================================================================
+
+def save_pending_validation(session_id, doc_type, valid, result):
+    """Record the model's verdict for an upload session's document (replaces any earlier one)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO pending_validations (session_id, doc_type, valid, result, created_at)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (session_id, doc_type) DO UPDATE
+                   SET valid = EXCLUDED.valid, result = EXCLUDED.result, created_at = EXCLUDED.created_at""",
+                (session_id, doc_type, 1 if valid else 0, Json(result), datetime.utcnow().isoformat())
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_pending_validations(session_id):
+    """Return {doc_type: {"valid": bool, "result": dict}} for an upload session."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT doc_type, valid, result FROM pending_validations WHERE session_id = %s",
+                (session_id,)
+            )
+            rows = cur.fetchall()
+        return {row["doc_type"]: {"valid": bool(row["valid"]), "result": row["result"]} for row in rows}
+    finally:
+        conn.close()
+
+
+def delete_pending_validations(session_id):
+    """Remove all verdicts for an upload session."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_validations WHERE session_id = %s", (session_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def cleanup_stale_pending_validations(max_age_hours=24):
+    """Delete verdicts for upload sessions that were never submitted."""
+    cutoff = (datetime.utcnow() - timedelta(hours=max_age_hours)).isoformat()
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_validations WHERE created_at < %s", (cutoff,))
+            removed = cur.rowcount
+        conn.commit()
+        if removed:
+            logger.info(f"Cleaned up {removed} stale pending validation(s)")
     finally:
         conn.close()
 

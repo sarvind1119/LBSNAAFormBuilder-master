@@ -14,7 +14,7 @@
 
         // Auto-generate slug from name
         let autoSlug = true;
-        if (slugInput && slugInput.value) {
+        if (slugInput && slugInput.value && slugInput.dataset.autoSlug !== '1') {
             autoSlug = false;
         }
 
@@ -31,6 +31,33 @@
         if (slugInput) {
             slugInput.addEventListener('input', () => {
                 autoSlug = false;
+                if (slugPreview) slugPreview.textContent = slugInput.value || '...';
+            });
+        }
+
+        // Duplicate: optionally hand the original's public link over to the copy
+        const keepLink = document.getElementById('keepLink');
+        const handoverSection = document.getElementById('handoverSection');
+        const archiveSlug = document.getElementById('archiveSlug');
+        if (keepLink && handoverSection && archiveSlug && slugInput) {
+            let copySlug = slugInput.value;
+            let copyAutoSlug = autoSlug;
+            keepLink.addEventListener('change', () => {
+                const on = keepLink.checked;
+                handoverSection.classList.toggle('hidden', !on);
+                archiveSlug.disabled = !on;
+                archiveSlug.required = on;
+                slugInput.readOnly = on;
+                slugInput.classList.toggle('bg-gray-100', on);
+                if (on) {
+                    copySlug = slugInput.value;
+                    copyAutoSlug = autoSlug;
+                    slugInput.value = keepLink.dataset.sourceSlug;
+                    autoSlug = false;
+                } else {
+                    slugInput.value = copySlug;
+                    autoSlug = copyAutoSlug;
+                }
                 if (slugPreview) slugPreview.textContent = slugInput.value || '...';
             });
         }

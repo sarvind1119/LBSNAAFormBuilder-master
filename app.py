@@ -28,15 +28,19 @@ from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
+from psycopg2.errors import UniqueViolation
+
 from model_manager import ModelManager
 from validation_engine import validate_document
-from storage import get_storage
+from storage import get_storage, content_type_for
 import secrets
 from database import (
     init_db, get_default_fields_config, get_default_doc_config,
-    create_course, get_all_courses, get_course_by_id, get_course_by_slug,
+    create_course, handover_course, get_all_courses, get_course_by_id, get_course_by_slug,
     update_course, toggle_course, delete_course,
-    save_submission, get_submissions_by_course, get_submission_count,
+    save_submission, submission_exists, get_submissions_by_course, get_submission_count,
+    save_pending_validation, get_pending_validations, delete_pending_validations,
+    cleanup_stale_pending_validations,
     delete_submission, update_submission_files, get_submission_by_id,
     get_user_by_username, get_user_by_id, get_all_users,
     create_user, update_user_role, update_user_password, delete_user,
@@ -140,6 +144,26 @@ def slugify(text):
     return text.strip('-')
 
 
+def _validation_payload(result):
+    """The subset of a validate_document() result exposed to clients and stored on submissions."""
+    return {
+        'is_valid': result['is_valid'],
+        'expected_type': result['expected_type'],
+        'actual_type': result['actual_type'],
+        'confidence': result['confidence'],
+        'result': result['result'],
+        'message': result['message'],
+        'outlier_score': result['outlier_score'],
+        'ocr_text': result.get('ocr_text', ''),
+        'name_match': result.get('name_match', {}),
+        'ocr_status': result.get('ocr_status', 'UNAVAILABLE'),
+        'ocr_confidence': result.get('ocr_confidence', 0.0),
+        'extraction_method': result.get('extraction_method', 'NONE'),
+        'keywords_found': result.get('keywords_found', []),
+        'celebrity_warning': result.get('celebrity_warning', None),
+    }
+
+
 def require_models(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -153,11 +177,28 @@ def require_models(f):
 # AUTH DECORATORS
 # ============================================================================
 
+def _refresh_session_user():
+    """
+    Re-read the logged-in user from the database so deleted users lose access
+    and role changes take effect immediately. Returns False if not logged in.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return False
+    user = get_user_by_id(user_id)
+    if not user:
+        session.clear()
+        return False
+    session['username'] = user['username']
+    session['user_role'] = user['role']
+    return True
+
+
 def require_login(f):
     """Require any authenticated user (admin or viewer)."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get('user_id'):
+        if not _refresh_session_user():
             return redirect(url_for('admin_login'))
         return f(*args, **kwargs)
     return decorated
@@ -167,7 +208,7 @@ def require_admin(f):
     """Require authenticated user with admin role."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get('user_id'):
+        if not _refresh_session_user():
             return redirect(url_for('admin_login'))
         if session.get('user_role') != 'admin':
             flash('You do not have permission to perform this action.', 'error')
@@ -273,7 +314,10 @@ def validate(doc_type):
             user_name=user_name
         )
 
-        # Save file to pending storage if upload_session_id is provided
+        payload = _validation_payload(result)
+
+        # Keep the file and the model's own verdict for this upload session;
+        # the final submit reads the verdict from here, never from the browser.
         upload_session_id = request.form.get('upload_session_id', '').strip()
         if upload_session_id:
             try:
@@ -281,26 +325,10 @@ def validate(doc_type):
                 storage.save_pending(upload_session_id, doc_type, temp_filepath)
             except Exception as e:
                 logger.error(f"Failed to save pending file: {e}")
+            accepted = bool(result['is_valid']) and result['result'] == 'ACCEPT'
+            save_pending_validation(upload_session_id, doc_type, accepted, payload)
 
-        return jsonify({
-            'status': 'success',
-            'validation': {
-                'is_valid': result['is_valid'],
-                'expected_type': result['expected_type'],
-                'actual_type': result['actual_type'],
-                'confidence': result['confidence'],
-                'result': result['result'],
-                'message': result['message'],
-                'outlier_score': result['outlier_score'],
-                'ocr_text': result.get('ocr_text', ''),
-                'name_match': result.get('name_match', {}),
-                'ocr_status': result.get('ocr_status', 'UNAVAILABLE'),
-                'ocr_confidence': result.get('ocr_confidence', 0.0),
-                'extraction_method': result.get('extraction_method', 'NONE'),
-                'keywords_found': result.get('keywords_found', []),
-                'celebrity_warning': result.get('celebrity_warning', None)
-            }
-        }), 200
+        return jsonify({'status': 'success', 'validation': payload}), 200
     except Exception as e:
         logger.error(f"Validation error: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Validation failed'}), 500
@@ -377,16 +405,84 @@ def admin_course_edit(course_id):
                            doc_config=course['doc_config'])
 
 
-def _save_course(is_new, course_id=None):
-    """Process the course create/edit form submission."""
-    name = request.form.get('name', '').strip()
-    slug = request.form.get('slug', '').strip() or slugify(name)
-    description = request.form.get('description', '').strip()
+def _unique_slug(base):
+    """Return base, or base-2, base-3, ... — the first slug not used by any course."""
+    candidate = base
+    n = 2
+    while get_course_by_slug(candidate):
+        candidate = f"{base}-{n}"
+        n += 1
+    return candidate
 
-    if not name or not slug:
+
+@app.route('/admin/course/<int:course_id>/duplicate', methods=['GET', 'POST'])
+@require_admin
+def admin_course_duplicate(course_id):
+    """
+    Open the new-course form pre-filled from an existing course. Nothing is
+    created until the admin saves; the copy starts closed. Submissions and
+    per-course user access are not copied.
+    """
+    source = get_course_by_id(course_id)
+    if not source:
+        abort(404)
+    if request.method == 'POST':
+        if request.form.get('keep_link') == '1':
+            return _handover_course(source)
+        return _save_course(is_new=True, is_active=False)
+    prefill = {
+        'name': f"{source['name']} (Copy)",
+        'slug': _unique_slug(f"{source['slug']}-copy"),
+        'description': source.get('description') or '',
+        'archive_slug': _unique_slug(f"{source['slug']}-previous"),
+    }
+    return render_template('admin/course_form.html',
+                           course=None,
+                           prefill=prefill,
+                           duplicate_of=source,
+                           fields_config=source['fields_config'],
+                           doc_config=source['doc_config'])
+
+
+def _handover_course(source):
+    """
+    Create the duplicate on the source's public link: the source moves to the
+    archive slug and closes, the new course opens on the original slug.
+    """
+    name = request.form.get('name', '').strip()
+    description = request.form.get('description', '').strip()
+    archive_slug = request.form.get('archive_slug', '').strip()
+
+    if not name:
         flash('Course name is required.', 'error')
         return redirect(request.url)
+    if not archive_slug or slugify(archive_slug) != archive_slug:
+        flash('Enter a new link for the old course using lowercase letters, numbers and hyphens '
+              '(e.g. ai-champions2026-round3).', 'error')
+        return redirect(request.url)
+    if archive_slug == source['slug']:
+        flash("The old course's new link must be different from its current link.", 'error')
+        return redirect(request.url)
+    existing = get_course_by_slug(archive_slug)
+    if existing:
+        flash(f'The URL slug "{archive_slug}" is already used by "{existing["name"]}". Choose a different one.', 'error')
+        return redirect(request.url)
 
+    fields_config, doc_config = _configs_from_form()
+    try:
+        handover_course(source['id'], archive_slug, name, description, fields_config, doc_config)
+    except Exception as e:
+        logger.error(f"Error handing over course {source['id']}: {e}", exc_info=True)
+        flash('Could not create the course. Nothing was changed. Please try again.', 'error')
+        return redirect(request.url)
+
+    flash(f'/form/{source["slug"]} now opens "{name}" and is accepting registrations. '
+          f'The previous course "{source["name"]}" moved to /form/{archive_slug} and is closed.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+def _configs_from_form():
+    """Build (fields_config, doc_config) from the course form."""
     # Build fields_config from form
     fields_config = {"default_fields": [], "custom_fields": []}
     default_keys = request.form.getlist('default_field_keys')
@@ -457,10 +553,33 @@ def _save_course(is_new, course_id=None):
         doc_label = request.form.get(f'doc_{doc_type}_label', doc_type)
         doc_config[doc_type] = {"enabled": doc_enabled, "required": doc_required, "label": doc_label}
 
+    return fields_config, doc_config
+
+
+def _save_course(is_new, course_id=None, is_active=True):
+    """Process the course create/edit form submission."""
+    name = request.form.get('name', '').strip()
+    slug = request.form.get('slug', '').strip() or slugify(name)
+    description = request.form.get('description', '').strip()
+
+    if not name or not slug:
+        flash('Course name is required.', 'error')
+        return redirect(request.url)
+
+    existing = get_course_by_slug(slug)
+    if existing and existing['id'] != course_id:
+        flash(f'The URL slug "{slug}" is already used by "{existing["name"]}". Choose a different slug.', 'error')
+        return redirect(request.url)
+
+    fields_config, doc_config = _configs_from_form()
+
     try:
         if is_new:
-            create_course(name, slug, description, fields_config, doc_config)
-            flash(f'Course "{name}" created.', 'success')
+            create_course(name, slug, description, fields_config, doc_config, is_active=is_active)
+            if is_active:
+                flash(f'Course "{name}" created.', 'success')
+            else:
+                flash(f'Course "{name}" created as a copy. It is closed — click Activate when ready.', 'success')
         else:
             update_course(course_id, name, slug, description, fields_config, doc_config)
             flash(f'Course "{name}" updated.', 'success')
@@ -573,16 +692,16 @@ def admin_download_file(submission_id, doc_type):
     if not file_key:
         abort(404)
 
-    storage = get_storage()
-    file_path = storage.get_path(file_key)
-    if not file_path:
+    data = get_storage().read_bytes(file_key)
+    if data is None:
         abort(404)
 
     download = request.args.get('download', '0') == '1'
     return send_file(
-        file_path,
+        io.BytesIO(data),
+        mimetype=content_type_for(file_key),
         as_attachment=download,
-        download_name=Path(file_key).name if download else None
+        download_name=Path(file_key).name,
     )
 
 
@@ -775,7 +894,7 @@ def admin_replace_doc(submission_id, doc_type):
 
 
 @app.route('/admin/submissions/bulk-flag-notify', methods=['POST'])
-@require_admin
+@require_login
 def admin_bulk_flag_notify():
     """Bulk flag & notify multiple submissions."""
     data = request.get_json(silent=True)
@@ -805,6 +924,11 @@ def admin_bulk_flag_notify():
         if not sub or doc_type not in VALID_DOC_TYPES:
             failed += 1
             results.append({'submission_id': sub_id, 'status': 'error', 'message': 'Invalid submission or doc type'})
+            continue
+
+        if not can_manage_course(sub['course_id']):
+            failed += 1
+            results.append({'submission_id': sub_id, 'status': 'error', 'message': 'Forbidden'})
             continue
 
         course = get_course_by_id(sub['course_id'])
@@ -1352,26 +1476,43 @@ def public_form_submit(slug):
     if not data:
         return jsonify({'status': 'error', 'message': 'No data received'}), 400
 
-    form_data = data.get('form_data', {})
-    doc_results = data.get('doc_results', {})
+    form_data = data.get('form_data')
+    if not isinstance(form_data, dict) or not all(isinstance(v, str) for v in form_data.values()):
+        return jsonify({'status': 'error', 'message': 'Invalid form data'}), 400
+    form_data = {k: v.strip() for k, v in form_data.items()}
 
-    # Validate required fields
+    upload_session_id = data.get('upload_session_id')
+    upload_session_id = upload_session_id.strip() if isinstance(upload_session_id, str) else ''
+
+    # Custom fields have no 'enabled' flag: they are always shown.
     all_fields = course['fields_config'].get('default_fields', []) + course['fields_config'].get('custom_fields', [])
     for f in all_fields:
-        if f.get('enabled') and f.get('required'):
-            val = form_data.get(f['key'], '').strip()
-            if not val:
-                return jsonify({'status': 'error', 'message': f'{f["label"]} is required'}), 400
+        if f.get('enabled', True) and f.get('required') and not form_data.get(f['key']):
+            return jsonify({'status': 'error', 'message': f'{f["label"]} is required'}), 400
 
-    email = form_data.get('email', '').strip()
+    email = form_data.get('email', '')
     if not email or not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email):
         return jsonify({'status': 'error', 'message': 'Valid email is required'}), 400
 
-    # Validate mobile if present and enabled
-    mobile = form_data.get('mobile', '').strip()
+    mobile = form_data.get('mobile', '')
     mobile_field = next((f for f in all_fields if f['key'] == 'mobile' and f.get('enabled')), None)
-    if mobile_field and mobile_field.get('required') and (not mobile or not re.match(r'^\d{10}$', mobile)):
+    if mobile_field and mobile_field.get('required') and not re.match(r'^\d{10}$', mobile):
         return jsonify({'status': 'error', 'message': 'Valid 10-digit mobile number is required'}), 400
+
+    # Verdicts come from what the model recorded at upload time, never from the browser.
+    # Rejected documents are still accepted for submission; admins see the verdict.
+    doc_results = get_pending_validations(upload_session_id) if upload_session_id else {}
+    for doc_type, dc in course['doc_config'].items():
+        if dc.get('enabled') and dc.get('required') and doc_type not in doc_results:
+            return jsonify({'status': 'error', 'message': f'{dc.get("label", doc_type)} must be uploaded'}), 400
+    doc_results = {
+        doc_type: r for doc_type, r in doc_results.items()
+        if course['doc_config'].get(doc_type, {}).get('enabled')
+    }
+
+    duplicate_msg = 'A submission with this email already exists for this course.'
+    if submission_exists(course['id'], email):
+        return jsonify({'status': 'error', 'message': duplicate_msg}), 409
 
     try:
         submission_id = save_submission(
@@ -1380,28 +1521,29 @@ def public_form_submit(slug):
             form_data=form_data,
             doc_results=doc_results
         )
-
-        # Finalize uploaded files from pending to permanent storage
-        upload_session_id = data.get('upload_session_id', '').strip()
-        if upload_session_id:
-            try:
-                storage = get_storage()
-                file_keys = storage.finalize(upload_session_id, course['slug'], submission_id)
-                if file_keys:
-                    update_submission_files(submission_id, file_keys)
-            except Exception as e:
-                logger.error(f"Failed to finalize files for submission {submission_id}: {e}")
-
-        return jsonify({
-            'status': 'success',
-            'submission_id': submission_id,
-            'message': 'Registration submitted successfully!'
-        }), 201
+    except UniqueViolation:
+        return jsonify({'status': 'error', 'message': duplicate_msg}), 409
     except Exception as e:
-        if 'UNIQUE constraint' in str(e):
-            return jsonify({'status': 'error', 'message': 'A submission with this email already exists for this course.'}), 409
         logger.error(f"Submission error: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': 'Failed to save submission'}), 500
+
+    if upload_session_id:
+        try:
+            file_keys = get_storage().finalize(upload_session_id, course['slug'], submission_id)
+            if file_keys:
+                update_submission_files(submission_id, file_keys)
+        except Exception as e:
+            logger.error(f"Failed to finalize files for submission {submission_id}: {e}")
+        try:
+            delete_pending_validations(upload_session_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear pending validations for {upload_session_id}: {e}")
+
+    return jsonify({
+        'status': 'success',
+        'submission_id': submission_id,
+        'message': 'Registration submitted successfully!'
+    }), 201
 
 
 # ============================================================================
@@ -1460,6 +1602,7 @@ def initialize_app():
         cleanup_hours = int(os.environ.get('UPLOAD_CLEANUP_HOURS', '24'))
         storage = get_storage()
         storage.cleanup_stale_pending(max_age_hours=cleanup_hours)
+        cleanup_stale_pending_validations(max_age_hours=cleanup_hours)
     except Exception as e:
         logger.warning(f"Pending upload cleanup failed: {e}")
 
@@ -1470,6 +1613,6 @@ def initialize_app():
 
 if __name__ == '__main__':
     initialize_app()
-    debug_mode = os.environ.get('FLASK_ENV', 'development') == 'development'
+    debug_mode = os.environ.get('FLASK_ENV', 'production') == 'development'
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=False)

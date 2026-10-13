@@ -28,7 +28,15 @@ CONTENT_TYPES = {
     ".gif": "image/gif",
     ".webp": "image/webp",
     ".pdf": "application/pdf",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
 }
+
+
+def content_type_for(key):
+    """MIME type for a storage key based on its extension."""
+    return CONTENT_TYPES.get(Path(key).suffix.lower(), "application/octet-stream")
 
 
 class AzureBlobStorage:
@@ -50,10 +58,6 @@ class AzureBlobStorage:
             # Container already exists
             pass
 
-    @staticmethod
-    def _content_type_for(ext):
-        return CONTENT_TYPES.get(ext.lower(), "application/octet-stream")
-
     def _delete_by_prefix(self, prefix):
         for blob in self._container_client.list_blobs(name_starts_with=prefix):
             self._container_client.delete_blob(blob.name)
@@ -64,7 +68,7 @@ class AzureBlobStorage:
                 name=blob_name,
                 data=f,
                 overwrite=True,
-                content_settings=ContentSettings(content_type=self._content_type_for(ext)),
+                content_settings=ContentSettings(content_type=content_type_for(blob_name)),
             )
 
     def save_pending(self, session_id, doc_type, source_path):
@@ -136,6 +140,16 @@ class AzureBlobStorage:
         finally:
             tmp.close()
         return tmp.name
+
+    def read_bytes(self, key):
+        """Return a blob's contents as bytes, or None if the key is empty or missing."""
+        if not key:
+            return None
+        try:
+            return self._container_client.get_blob_client(key).download_blob().readall()
+        except Exception as e:
+            logger.error(f"Blob not found: {key} ({e})")
+            return None
 
     def get_download_url(self, key, expiry_hours=1):
         """

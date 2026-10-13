@@ -362,6 +362,12 @@
 <script>
 const CSRF_TOKEN = '{{ csrf_token() }}';
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
+
 // ============================
 // Replace Document Modal
 // ============================
@@ -691,18 +697,18 @@ async function loadNotificationHistory(submissionId) {
 
         let html = '<div class="space-y-2">';
         data.notifications.forEach(n => {
-            const statusColor = n.email_status === 'sent' ? 'green' : n.email_status === 'failed' ? 'red' : 'yellow';
+            const statusColor = { sent: 'green', failed: 'red' }[n.email_status] || 'yellow';
             const usedBadge = n.token_used ? '<span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">Re-uploaded</span>' : '';
             html += `
                 <div class="bg-white border rounded p-2 text-xs">
                     <div class="flex items-center gap-2">
-                        <span class="font-medium">${n.doc_type}</span>
-                        <span class="px-1.5 py-0.5 rounded bg-${statusColor}-100 text-${statusColor}-700">${n.email_status}</span>
+                        <span class="font-medium">${escapeHtml(n.doc_type)}</span>
+                        <span class="px-1.5 py-0.5 rounded bg-${statusColor}-100 text-${statusColor}-700">${escapeHtml(n.email_status)}</span>
                         ${usedBadge}
-                        <span class="text-gray-400 ml-auto">${n.created_at ? n.created_at.substring(0, 16) : ''}</span>
+                        <span class="text-gray-400 ml-auto">${escapeHtml(n.created_at ? n.created_at.substring(0, 16) : '')}</span>
                     </div>
-                    <p class="text-gray-500 mt-1">By: ${n.created_by_username || 'Unknown'} | Deadline: ${n.deadline || 'N/A'}</p>
-                    ${n.admin_message ? `<p class="text-gray-600 mt-1">"${n.admin_message}"</p>` : ''}
+                    <p class="text-gray-500 mt-1">By: ${escapeHtml(n.created_by_username || 'Unknown')} | Deadline: ${escapeHtml(n.deadline || 'N/A')}</p>
+                    ${n.admin_message ? `<p class="text-gray-600 mt-1">"${escapeHtml(n.admin_message)}"</p>` : ''}
                 </div>`;
         });
         html += '</div>';

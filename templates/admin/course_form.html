@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{% if course %}Edit{% else %}New{% endif %} Course - LBSNAA Admin{% endblock %}
+{% block title %}{% if course %}Edit{% elif duplicate_of %}Duplicate{% else %}New{% endif %} Course - LBSNAA Admin{% endblock %}
 
 {% block nav %}
 <nav class="bg-white shadow-sm border-b">
@@ -11,10 +11,18 @@
 {% endblock %}
 
 {% block content %}
+{% set values = course or prefill %}
 <div class="max-w-4xl mx-auto">
     <h2 class="text-xl font-semibold text-gray-800 mb-6">
-        {% if course %}Edit Course: {{ course.name }}{% else %}Create New Course{% endif %}
+        {% if course %}Edit Course: {{ course.name }}{% elif duplicate_of %}Duplicate Course: {{ duplicate_of.name }}{% else %}Create New Course{% endif %}
     </h2>
+    {% if duplicate_of %}
+    <div class="mb-6 p-4 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 text-sm">
+        All fields, custom fields and document settings have been copied from <strong>{{ duplicate_of.name }}</strong>.
+        Update the name and URL slug for the new group, adjust anything else, then click <strong>Create Copy</strong>.
+        The new course starts <strong>closed</strong> (unless you keep the same public link below); submissions and user access are not copied.
+    </div>
+    {% endif %}
 
     <form method="POST" id="courseForm" class="space-y-8">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -26,21 +34,51 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Course Name *</label>
                     <input type="text" name="name" id="courseName" required
-                           value="{{ course.name if course else '' }}"
+                           value="{{ values.name if values else '' }}"
                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">URL Slug *</label>
                     <input type="text" name="slug" id="courseSlug" required
-                           value="{{ course.slug if course else '' }}"
+                           value="{{ values.slug if values else '' }}"
+                           {% if duplicate_of %}data-auto-slug="1"{% endif %}
                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none font-mono text-sm">
-                    <p class="text-xs text-gray-400 mt-1">Form URL: /form/<span id="slugPreview">{{ course.slug if course else '...' }}</span></p>
+                    <p class="text-xs text-gray-400 mt-1">Form URL: /form/<span id="slugPreview">{{ values.slug if values else '...' }}</span></p>
                 </div>
             </div>
+            {% if duplicate_of %}
+            <div class="mt-4 p-4 rounded-lg border border-amber-200 bg-amber-50">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" name="keep_link" value="1" id="keepLink"
+                           data-source-slug="{{ duplicate_of.slug }}"
+                           class="mt-0.5 h-4 w-4 rounded">
+                    <span class="text-sm text-gray-800">
+                        <strong>Keep the same public link</strong>
+                        (<code class="font-mono">/form/{{ duplicate_of.slug }}</code>) for this new course
+                        <span class="block text-xs text-gray-500 mt-0.5">Use this when the link has already been shared and the next batch should register on it.</span>
+                    </span>
+                </label>
+                <div id="handoverSection" class="hidden mt-3 pl-6 space-y-2">
+                    <label for="archiveSlug" class="block text-sm font-medium text-gray-700">Move the old course "{{ duplicate_of.name }}" to this link *</label>
+                    <div class="flex items-center gap-1 text-sm">
+                        <span class="font-mono text-gray-500">/form/</span>
+                        <input type="text" name="archive_slug" id="archiveSlug" disabled
+                               value="{{ prefill.archive_slug }}"
+                               pattern="[a-z0-9_]+(-[a-z0-9_]+)*"
+                               title="Lowercase letters, numbers and hyphens, e.g. ai-champions2026-round3"
+                               class="w-72 px-3 py-1.5 border border-gray-300 rounded font-mono text-sm focus:ring-2 focus:ring-accent-500 outline-none">
+                    </div>
+                    <p class="text-xs text-gray-600">
+                        On <strong>Create Copy</strong>, the old course is closed and moved to this link; its submissions stay with it.
+                        The new course opens immediately on <code class="font-mono">/form/{{ duplicate_of.slug }}</code>.
+                    </p>
+                </div>
+            </div>
+            {% endif %}
             <div class="mt-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
                 <textarea name="description" rows="2"
-                          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">{{ course.description if course else '' }}</textarea>
+                          class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">{{ values.description if values else '' }}</textarea>
             </div>
         </div>
 
@@ -166,7 +204,7 @@
         <!-- Submit -->
         <div class="flex items-center gap-4">
             <button type="submit" class="bg-accent-600 hover:bg-accent-700 text-white font-medium py-3 px-8 rounded-lg transition">
-                {% if course %}Save Changes{% else %}Create Course{% endif %}
+                {% if course %}Save Changes{% elif duplicate_of %}Create Copy{% else %}Create Course{% endif %}
             </button>
             <a href="{{ url_for('admin_dashboard') }}" class="text-gray-500 hover:text-gray-700">Cancel</a>
         </div>
