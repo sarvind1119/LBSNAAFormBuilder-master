@@ -180,8 +180,12 @@ def init_db():
             # Seed default admin user if no users exist
             cur.execute("SELECT COUNT(*) AS cnt FROM users")
             user_count = cur.fetchone()["cnt"]
-            if user_count == 0:
-                default_pw = os.environ.get('ADMIN_PASSWORD', 'admin')
+            is_development = os.environ.get('FLASK_ENV', 'production') == 'development'
+            default_pw = os.environ.get('ADMIN_PASSWORD') or ('admin' if is_development else None)
+            if user_count == 0 and not default_pw:
+                logger.error("No users exist and ADMIN_PASSWORD is not set: no admin account was created. "
+                             "Set ADMIN_PASSWORD and restart.")
+            elif user_count == 0:
                 cur.execute(
                     "INSERT INTO users (username, password_hash, role, created_at) VALUES (%s, %s, %s, %s)",
                     ('admin', generate_password_hash(default_pw), 'admin', datetime.utcnow().isoformat())
@@ -651,6 +655,33 @@ def get_submission_by_id(submission_id):
             cur.execute("SELECT * FROM submissions WHERE id = %s", (submission_id,))
             row = cur.fetchone()
         return _parse_submission_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_file_keys(course_id=None, submission_id=None):
+    """
+    Return every blob key ever stored for a submission or for all submissions of
+    a course: current files plus files recorded by re-uploads and admin
+    replacements. Exactly one of course_id / submission_id must be given.
+    """
+    if (course_id is None) == (submission_id is None):
+        raise ValueError("Pass exactly one of course_id or submission_id")
+    where, param = ("s.course_id = %s", course_id) if course_id is not None else ("s.id = %s", submission_id)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT unnest(ARRAY[s.photo_file, s.id_file, s.letter_file]) AS key
+                    FROM submissions s WHERE {where}
+                    UNION
+                    SELECT r.new_file FROM reupload_log r JOIN submissions s ON s.id = r.submission_id WHERE {where}
+                    UNION
+                    SELECT a.new_file FROM admin_doc_replacement a JOIN submissions s ON s.id = a.submission_id WHERE {where}""",
+                (param, param, param)
+            )
+            rows = cur.fetchall()
+        return {row["key"] for row in rows if row["key"]}
     finally:
         conn.close()
 

@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import (
     BlobServiceClient,
     BlobSasPermissions,
@@ -173,12 +174,14 @@ class AzureBlobStorage:
         return f"{self._service_client.url}{self.container_name}/{key}?{sas_token}"
 
     def delete(self, key):
-        """Delete a single blob by key."""
+        """Delete a single blob by key. A blob that no longer exists counts as deleted."""
         if not key:
             return False
         try:
             self._container_client.delete_blob(key)
             logger.info(f"Deleted blob: {key}")
+            return True
+        except ResourceNotFoundError:
             return True
         except Exception as e:
             logger.error(f"Error deleting blob {key}: {e}")

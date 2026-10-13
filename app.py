@@ -25,6 +25,7 @@ from flask_cors import CORS
 from flask_wtf.csrf import CSRFProtect
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -41,7 +42,7 @@ from database import (
     save_submission, submission_exists, get_submissions_by_course, get_submission_count,
     save_pending_validation, get_pending_validations, delete_pending_validations,
     cleanup_stale_pending_validations,
-    delete_submission, update_submission_files, get_submission_by_id,
+    delete_submission, update_submission_files, get_submission_by_id, get_file_keys,
     get_user_by_username, get_user_by_id, get_all_users,
     create_user, update_user_role, update_user_password, delete_user,
     create_notification, get_notification_by_token, mark_notification_sent,
@@ -60,20 +61,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+IS_DEVELOPMENT = os.environ.get('FLASK_ENV', 'production') == 'development'
+MIN_PASSWORD_LENGTH = 8
+
 # Flask app
 app = Flask(__name__)
-CORS(app)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-change-me')
+
+# Azure App Service forwards requests through its front end; trust one hop of
+# X-Forwarded-* so request.remote_addr / scheme reflect the real client.
+if os.environ.get('TRUST_PROXY', '1') == '1':
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# Same-origin by default; allow specific cross-origin callers only if configured.
+cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '').split(',') if o.strip()]
+if cors_origins:
+    CORS(app, origins=cors_origins)
+
+secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    if IS_DEVELOPMENT:
+        secret_key = 'dev-secret-change-me'
+    else:
+        secret_key = secrets.token_hex(32)
+        logger.warning("SECRET_KEY is not set: using a random key. Sessions will reset on every restart.")
+app.secret_key = secret_key
+
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB
 app.config['UPLOAD_FOLDER'] = Path('temp_uploads')
 app.config['UPLOAD_FOLDER'].mkdir(exist_ok=True)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '0' if IS_DEVELOPMENT else '1') == '1',
+)
 
 # CSRF protection
 csrf = CSRFProtect(app)
 
+
+def client_ip():
+    """Client address for rate limiting, without any ':port' suffix a proxy may add."""
+    addr = get_remote_address() or ''
+    if addr.count(':') == 1:
+        addr = addr.split(':', 1)[0]
+    return addr
+
+
 # Rate limiter
 limiter = Limiter(
-    get_remote_address,
+    client_ip,
     app=app,
     default_limits=[],
     storage_uri="memory://",
@@ -130,12 +166,29 @@ def save_temp_file(file):
         return None
 
 
+def _delete_stored_files(keys):
+    """Best-effort removal of uploaded documents after their DB rows are gone."""
+    if not keys:
+        return
+    storage = get_storage()
+    failed = [key for key in keys if not storage.delete(key)]
+    if failed:
+        logger.warning(f"Could not delete {len(failed)} of {len(keys)} stored file(s): {failed}")
+
+
 def cleanup_file(filepath):
     try:
         if filepath and Path(filepath).exists():
             Path(filepath).unlink()
     except Exception as e:
         logger.error(f"Error cleaning up temp file: {e}")
+
+
+def password_error(password):
+    """Return a user-facing message if the password is too weak, else None."""
+    if len(password or '') < MIN_PASSWORD_LENGTH:
+        return f'Password must be at least {MIN_PASSWORD_LENGTH} characters.'
+    return None
 
 
 def slugify(text):
@@ -625,7 +678,9 @@ def admin_course_toggle(course_id):
 def admin_course_delete(course_id):
     course = get_course_by_id(course_id)
     if course:
+        file_keys = get_file_keys(course_id=course_id)
         delete_course(course_id)
+        _delete_stored_files(file_keys)
         flash(f'Course "{course["name"]}" deleted.', 'success')
     return redirect(url_for('admin_dashboard'))
 
@@ -686,7 +741,9 @@ def admin_submission_delete(submission_id):
     if not can_manage_course(course_id):
         abort(403)
 
+    file_keys = get_file_keys(submission_id=submission_id)
     delete_submission(submission_id)
+    _delete_stored_files(file_keys)
     flash('Submission deleted.', 'success')
     return redirect(url_for('admin_submissions', course_id=course_id))
 
@@ -1344,6 +1401,9 @@ def admin_user_new():
         if not username or not password:
             flash('Username and password are required.', 'error')
             return redirect(request.url)
+        if password_error(password):
+            flash(password_error(password), 'error')
+            return redirect(request.url)
         if role not in ('admin', 'viewer'):
             role = 'viewer'
         try:
@@ -1376,6 +1436,9 @@ def admin_user_edit(user_id):
         new_password = request.form.get('password', '').strip()
         if new_role not in ('admin', 'viewer'):
             new_role = 'viewer'
+        if new_password and password_error(new_password):
+            flash(password_error(new_password), 'error')
+            return redirect(request.url)
         update_user_role(user_id, new_role)
         if new_password:
             update_user_password(user_id, generate_password_hash(new_password))
@@ -1425,8 +1488,8 @@ def admin_change_password():
             flash('Current password is incorrect.', 'error')
             return redirect(request.url)
 
-        if not new_pw or len(new_pw) < 4:
-            flash('New password must be at least 4 characters.', 'error')
+        if password_error(new_pw):
+            flash(password_error(new_pw), 'error')
             return redirect(request.url)
 
         if new_pw != confirm_pw:
@@ -1477,6 +1540,7 @@ def public_form(slug):
 
 @csrf.exempt
 @app.route('/form/<slug>/submit', methods=['POST'])
+@limiter.limit("20 per minute")
 def public_form_submit(slug):
     course = get_course_by_slug(slug)
     if not course:
@@ -1575,6 +1639,14 @@ def index():
 def handle_file_too_large(e):
     return jsonify({'status': 'error', 'message': 'File size exceeds 5MB limit'}), 413
 
+@app.errorhandler(429)
+def handle_rate_limited(e):
+    message = 'Too many requests. Please wait a minute and try again.'
+    if request.path == url_for('admin_login'):
+        flash(message, 'error')
+        return render_template('admin/login.html'), 429
+    return jsonify({'status': 'error', 'message': message}), 429
+
 @app.errorhandler(404)
 def handle_not_found(e):
     return render_template('public/closed.html', course=None, message="Page not found"), 404
@@ -1625,6 +1697,6 @@ def initialize_app():
 
 if __name__ == '__main__':
     initialize_app()
-    debug_mode = os.environ.get('FLASK_ENV', 'production') == 'development'
+    debug_mode = IS_DEVELOPMENT
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=False)

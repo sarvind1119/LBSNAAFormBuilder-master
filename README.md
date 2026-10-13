@@ -141,7 +141,8 @@ LBSNAAFormBuilder/
 ### 1. Startup
 
 - Creates PostgreSQL tables if missing (no migration tool; `init_db()` is idempotent)
-- Seeds the `admin` user (password from `ADMIN_PASSWORD`) if there are no users
+- Seeds the `admin` user (password from `ADMIN_PASSWORD`) if there are no users. In production
+  no admin is created when `ADMIN_PASSWORD` is unset (development falls back to `admin`)
 - Loads ML models from `models/` and the optional celebrity detector
 - Cleans up pending uploads and verdicts older than `UPLOAD_CLEANUP_HOURS`
 
@@ -237,9 +238,12 @@ python app.py
 | `DATABASE_URL` | `postgresql://admin:testpass@localhost:5432/lbsnaa` | PostgreSQL connection string |
 | `AZURE_STORAGE_CONNECTION_STRING` | unset (required for uploads) | Azure Blob Storage / Azurite connection string |
 | `BLOB_CONTAINER_NAME` | `uploads` | Blob container for documents (created if missing) |
-| `SECRET_KEY` | `dev-secret-change-me` | Flask session signing key — **set in production** |
-| `ADMIN_PASSWORD` | `admin` | Password for the seeded `admin` user (only used when no users exist) |
+| `SECRET_KEY` | random per start (production) / `dev-secret-change-me` (development) | Flask session signing key — **set in production**, otherwise everyone is logged out on each restart |
+| `ADMIN_PASSWORD` | unset (production) / `admin` (development) | Password for the seeded `admin` user (only used when no users exist) |
 | `FLASK_ENV` | `production` | Set to `development` to enable debug mode with `python app.py` |
+| `SESSION_COOKIE_SECURE` | `1` (production) / `0` (development) | Send the session cookie over HTTPS only. Set to `0` only when serving production mode over plain HTTP locally |
+| `TRUST_PROXY` | `1` | Trust one proxy hop of `X-Forwarded-For/Proto/Host` (Azure front end) for client IP and scheme. Set to `0` if the app is exposed directly |
+| `CORS_ORIGINS` | unset | Comma-separated origins allowed to call the app cross-origin; unset = same-origin only |
 | `PORT` | `5000` | Port for `python app.py` and the gunicorn container |
 | `BASE_URL` | request host | Public base URL used in re-upload email links |
 | `SMTP_HOST` | unset | SMTP server; email notifications are disabled when unset |
@@ -458,19 +462,23 @@ Participant re-uploads and admin replacements store the engine's `is_valid` flag
 
 - Multi-user login with hashed passwords; role and per-course permissions are re-checked against the database on every admin request
 - CSRF protection (Flask-WTF) on admin forms and actions; public JSON/upload endpoints are CSRF-exempt
-- Rate limiting on login, validation and re-upload endpoints
+- Passwords must be at least 8 characters (new users, admin resets and password changes)
+- Session cookie is `HttpOnly`, `SameSite=Lax` and, in production, `Secure`
+- No cross-origin access unless `CORS_ORIGINS` is set
+- Rate limiting per client IP (taken from Azure's `X-Forwarded-For`): login 10/min,
+  validation 30/min, re-upload 10/min, form submission 20/min
+- No insecure fallbacks in production: a missing `SECRET_KEY` gets a random key (with a warning),
+  and no `admin`/`admin` account is seeded without `ADMIN_PASSWORD`
+- Deleting a submission or course also deletes its uploaded files from Blob Storage
 - Security headers (CSP, `X-Frame-Options`, `nosniff`, referrer policy)
 - Validation verdicts are recorded server-side; the browser cannot alter them
 - Re-upload links are random, single-use and expire at the end of the deadline day (IST)
 
-Known gaps to address for hardening:
+Operational notes:
 
-- CORS is enabled for all origins
-- Defaults for `SECRET_KEY` / `ADMIN_PASSWORD` are insecure; always set them
-- Minimum password length is weak (4 characters on change, none on create)
-- Session cookie `Secure`/`SameSite` flags are not set explicitly
-- No rate limit on `POST /form/<slug>/submit`
-- Deleting a submission/course does not delete its files from Blob Storage
+- Enable **HTTPS Only** on the App Service so the `Secure` session cookie is always usable
+- Rate limits are kept in memory per worker and reset on restart
+- Existing passwords shorter than 8 characters keep working until they are changed
 
 ---
 
@@ -478,7 +486,6 @@ Known gaps to address for hardening:
 
 - Add a test suite (unit + integration + API)
 - Add a migration framework (Alembic or similar)
-- Delete blob files when submissions/courses are deleted
 - Pin dependency versions for reproducible builds
 - Connection pooling for PostgreSQL
 - Async queue for heavy document validation workloads
