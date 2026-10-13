@@ -1,0 +1,5 @@
+{# LBSNAA wordmark. Set logo_class to size it; keep proportions (no fixed height + width together). #}
+<img src="{{ url_for('static', filename='img/lbsnaa-logo.png') }}"
+     alt="Lal Bahadur Shastri National Academy of Administration"
+     width="1193" height="284"
+     class="{{ logo_class|default('h-auto w-72 max-w-full mx-auto') }}">
