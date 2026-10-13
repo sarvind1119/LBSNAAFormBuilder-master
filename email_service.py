@@ -150,8 +150,8 @@ def _build_html_email(course_name, submission_id, doc_label, reason,
                     <tr>
                         <td style="padding: 20px 30px;">
                             <p style="margin: 0; color: #374151;">
-                                Please re-upload the corrected document before
-                                <strong style="color: #dc2626;">{deadline}</strong>.
+                                Please re-upload the corrected document by the end of
+                                <strong style="color: #dc2626;">{deadline}</strong> (IST).
                             </p>
                         </td>
                     </tr>
@@ -170,7 +170,7 @@ def _build_html_email(course_name, submission_id, doc_label, reason,
                         <td style="background: #f9fafb; padding: 20px 30px; border-top: 1px solid #e5e7eb;">
                             <p style="margin: 0; color: #9ca3af; font-size: 12px;">
                                 This is an automated message from LBSNAA Form Builder.
-                                The re-upload link is single-use and will expire on {deadline}.
+                                The re-upload link is single-use and will expire at the end of {deadline} (IST).
                             </p>
                         </td>
                     </tr>
@@ -202,11 +202,11 @@ def _build_text_email(course_name, submission_id, doc_label, reason,
             "",
         ])
     lines.extend([
-        f"Please re-upload the corrected document before {deadline}.",
+        f"Please re-upload the corrected document by the end of {deadline} (IST).",
         "",
         f"Re-upload link: {reupload_url}",
         "",
-        "This link is single-use and will expire on the deadline above.",
+        "This link is single-use and will expire at the end of the deadline day (IST).",
         "",
         "---",
         "LBSNAA Form Builder",

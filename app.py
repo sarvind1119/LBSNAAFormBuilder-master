@@ -12,7 +12,7 @@ import json
 import logging
 import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from functools import wraps
 
@@ -78,6 +78,9 @@ limiter = Limiter(
     default_limits=[],
     storage_uri="memory://",
 )
+
+# Re-upload deadlines are picked as a calendar date by admins in India.
+DEADLINE_TZ = timezone(timedelta(hours=5, minutes=30))  # IST (no daylight saving)
 
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf', 'webp', 'bmp', 'tiff', 'tif', 'gif'}
 VALID_DOC_TYPES = {'ID', 'PHOTO', 'LETTER'}
@@ -162,6 +165,24 @@ def _validation_payload(result):
         'keywords_found': result.get('keywords_found', []),
         'celebrity_warning': result.get('celebrity_warning', None),
     }
+
+
+def deadline_passed(deadline, now=None):
+    """
+    True once a re-upload deadline is over. A date-only deadline ('2026-11-10')
+    stays valid through the end of that day in IST; a full datetime without a
+    timezone is treated as UTC. Unparseable values never expire.
+    """
+    now = now or datetime.now(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(deadline).strip())
+    except ValueError:
+        return False
+    if len(str(deadline).strip()) == 10:
+        expires = (parsed + timedelta(days=1)).replace(tzinfo=DEADLINE_TZ)
+    else:
+        expires = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return now >= expires
 
 
 def require_models(f):
@@ -1001,14 +1022,9 @@ def reupload_page(token):
         return render_template('public/reupload_error.html',
                                message="This re-upload link has already been used."), 410
 
-    # Check deadline
-    try:
-        deadline_dt = datetime.fromisoformat(notif['deadline'])
-        if datetime.utcnow() > deadline_dt:
-            return render_template('public/reupload_error.html',
-                                   message=f"This re-upload link expired on {notif['deadline']}."), 410
-    except (ValueError, TypeError):
-        pass  # If deadline isn't parseable as datetime, skip expiry check
+    if deadline_passed(notif['deadline']):
+        return render_template('public/reupload_error.html',
+                               message=f"This re-upload link expired at the end of {notif['deadline']}."), 410
 
     doc_label = notif.get('doc_config', {}).get(notif['doc_type'], {}).get('label', notif['doc_type'])
 
@@ -1031,12 +1047,8 @@ def reupload_document(token):
     if notif['token_used']:
         return jsonify({'status': 'error', 'message': 'This link has already been used'}), 410
 
-    try:
-        deadline_dt = datetime.fromisoformat(notif['deadline'])
-        if datetime.utcnow() > deadline_dt:
-            return jsonify({'status': 'error', 'message': 'This link has expired'}), 410
-    except (ValueError, TypeError):
-        pass
+    if deadline_passed(notif['deadline']):
+        return jsonify({'status': 'error', 'message': 'This link has expired'}), 410
 
     if 'file' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file provided'}), 400
