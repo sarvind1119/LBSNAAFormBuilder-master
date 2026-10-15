@@ -38,7 +38,8 @@ WHITE_THRESHOLD = 240
 BLANK_PERCENTAGE = 95
 CONFIDENCE_THRESHOLD = 0.60
 OUTLIER_THRESHOLD = -0.65
-PDF_DPI = 300  # DPI for PDF conversion
+PDF_RENDER_SIZE = 1536  # longest side in px for rendered PDF pages (pipeline works at MAX_DIMENSION)
+MAX_PDF_PAGES = 3  # only the first pages are considered when picking the best page
 MAX_DIMENSION = 1024  # resize so largest side <= MAX_DIMENSION
 
 # OCR-based validation configuration
@@ -618,7 +619,7 @@ def extract_text_from_image_with_fallback(img: np.ndarray) -> Tuple[str, float, 
     return ocr_text, ocr_conf, "OCR" if ocr_text else "FAILED"
 
 
-def _convert_pdf_to_images(pdf_path: str, dpi: int = PDF_DPI) -> List[str]:
+def _convert_pdf_to_images(pdf_path: str) -> List[str]:
     """Convert PDF to PNG files in a temp directory and return list of file paths.
 
     Raises informative errors if pdf2image/poppler not available.
@@ -628,7 +629,11 @@ def _convert_pdf_to_images(pdf_path: str, dpi: int = PDF_DPI) -> List[str]:
 
     temp_dir = tempfile.mkdtemp(prefix="pdf_pages_")
     try:
-        pil_images = convert_from_path(pdf_path, dpi=dpi, fmt="png")
+        # Render straight to the working size instead of a fixed DPI: a 300 DPI
+        # A4 page is ~26 MB and seconds of CPU, yet everything downstream is
+        # shrunk to MAX_DIMENSION. Small pages (e.g. ID cards) still get enough pixels.
+        pil_images = convert_from_path(pdf_path, size=PDF_RENDER_SIZE, fmt="png",
+                                       first_page=1, last_page=MAX_PDF_PAGES)
     except Exception as e:
         # Cleanup and re-raise with context
         try:
@@ -750,7 +755,7 @@ def validate_document(
                 return result
 
             try:
-                pages = _convert_pdf_to_images(str(path_obj), dpi=PDF_DPI)
+                pages = _convert_pdf_to_images(str(path_obj))
                 temp_generated_paths.extend(pages)
             except Exception as e:
                 result["result"] = "ERROR"
