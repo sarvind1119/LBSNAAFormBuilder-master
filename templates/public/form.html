@@ -96,7 +96,11 @@
         {% if enabled_docs %}
         <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
             <h2 class="text-lg font-medium text-gray-900 mb-4">Document Upload</h2>
-            <p class="text-sm text-gray-500 mb-4">Upload documents for AI-powered validation. Accepted formats: JPG, PNG, PDF (max 5MB).</p>
+            <p class="text-sm text-gray-500 mb-3">Accepted formats: JPG, PNG, PDF (max 5MB).</p>
+            <div class="mb-4 flex gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900" role="note">
+                <span aria-hidden="true" class="font-bold">&#9432;</span>
+                <p>Uploaded documents are checked automatically to help the course team. The check can make mistakes, so <strong>if you see a warning but your document is correct, please ignore it and submit your registration.</strong> A warning will not affect your registration.</p>
+            </div>
 
             <div class="grid grid-cols-1 {% if enabled_docs|length > 1 %}md:grid-cols-{{ enabled_docs|length }}{% endif %} gap-4">
                 {% for doc in enabled_docs %}

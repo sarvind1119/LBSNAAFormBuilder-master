@@ -104,9 +104,7 @@
         uploadLoading.classList.add('hidden');
 
         const isValid = validation.is_valid;
-        const confidence = validation.confidence ? (validation.confidence * 100).toFixed(0) + '%' : '';
         const resultType = validation.result || '';
-        const message = validation.message || '';
 
         const unreadable = resultType === 'BLANK' || resultType === 'ERROR';
         let bgClass, textClass, icon, title;
@@ -115,7 +113,7 @@
             bgClass = 'bg-green-50 border border-green-200';
             textClass = 'text-green-700';
             icon = '<svg class="w-6 h-6 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
-            title = 'Document Accepted';
+            title = 'Document uploaded';
         } else if (unreadable) {
             bgClass = 'bg-red-50 border border-red-200';
             textClass = 'text-red-700';
@@ -125,7 +123,7 @@
             bgClass = 'bg-amber-50 border border-amber-200';
             textClass = 'text-amber-900';
             icon = '<svg class="w-6 h-6 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>';
-            title = `Document received, but we couldn't verify it automatically`;
+            title = 'Document uploaded';
         }
 
         let html = `
@@ -133,22 +131,11 @@
                 ${icon}
                 <div>
                     <p class="font-semibold ${textClass}">${title}</p>
-                    ${unreadable ? '' : `<p class="text-sm text-gray-600 mt-1">${escapeHtml(message)}</p>`}
-                    ${confidence ? `<p class="text-xs text-gray-500 mt-1">Confidence: ${confidence}</p>` : ''}
                     <p class="text-xs text-gray-400 mt-1">File: ${escapeHtml(filename)}</p>
                 </div>
             </div>`;
 
-        // Name match warning
-        if (validation.name_match && validation.name_match.match_status && validation.name_match.match_status !== 'MATCH') {
-            html += `<p class="text-xs text-amber-600 mt-2">Name match: ${escapeHtml(validation.name_match.message || validation.name_match.match_status)}</p>`;
-        }
-
-        // Celebrity warning
-        if (validation.celebrity_warning && validation.celebrity_warning.detected) {
-            html += `<p class="text-xs text-orange-600 mt-2 font-medium">Celebrity detected: ${escapeHtml(validation.celebrity_warning.celebrity_name)}</p>`;
-        }
-
+        // Verdict details (confidence, name match, celebrity check) are for the course team only.
         validationResult.className = `mt-4 p-4 rounded-lg ${bgClass}`;
         validationResult.innerHTML = html;
         validationResult.classList.remove('hidden');
@@ -159,13 +146,13 @@
                 mainContent.classList.add('hidden');
                 successScreen.classList.remove('hidden');
                 document.getElementById('successMessage').textContent =
-                    `Your ${DOC_LABEL} has been re-uploaded and validated successfully (${confidence} confidence).`;
+                    `Your ${DOC_LABEL} has been re-uploaded successfully.`;
             }, 2000);
         } else {
             // The re-upload link is single-use, so explain what happens next.
             const nextStep = unreadable
                 ? 'This re-upload link has now been used. Please contact the course team so they can send you a new link.'
-                : "Automated checks can occasionally get this wrong. Your document has been saved and the course team will review it; they will contact you if anything else is needed.";
+                : "Our automatic check couldn't confirm this document, but the check often gets it wrong. If this is the correct document, there is nothing more to do: it has been saved and the course team will review it.";
             validationResult.innerHTML += `
                 <p class="text-sm text-gray-600 mt-3 border-t pt-3">${nextStep}</p>`;
         }

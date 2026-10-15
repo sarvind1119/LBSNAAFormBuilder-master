@@ -172,22 +172,21 @@
         return doc ? doc.label : 'document';
     }
 
+    // Participants only see whether their file was received. The model's verdict,
+    // confidence, name match and celebrity check are stored for the course team
+    // (admin view) and never block submission.
     function showDocResult(docType, v) {
         const resultEl = document.querySelector(`.doc-result[data-doc-type="${docType}"]`);
         resultEl.classList.remove('hidden');
 
-        let html = '';
-        const confidence = Math.round((v.confidence || 0) * 100);
-
+        let html;
         if (v.result === 'ACCEPT') {
             html = `
                 <div class="bg-green-50 border border-green-200 rounded-lg p-3">
                     <div class="flex items-center gap-2">
                         <span class="text-green-600 font-bold">&#10003;</span>
-                        <span class="text-sm font-medium text-green-800">Accepted</span>
-                        <span class="text-xs text-green-600 ml-auto">${confidence}% confidence</span>
+                        <span class="text-sm font-medium text-green-800">Document uploaded</span>
                     </div>
-                    <p class="text-xs text-green-600 mt-1">${escapeHtml(v.message || '')}</p>
                 </div>`;
         } else if (v.result === 'BLANK' || v.result === 'ERROR') {
             // Unreadable files are almost never a model mistake: ask for a better file.
@@ -201,36 +200,14 @@
                     <p class="text-xs text-red-700 mt-1">Please upload a clear scan or photo of your ${escapeHtml(docLabel(docType))} (JPG, PNG or PDF).</p>
                 </div>`;
         } else {
-            // SUSPICIOUS, MISMATCH, WRONG: the automated check may be wrong; submission stays allowed.
+            // SUSPICIOUS, MISMATCH, WRONG: the automated check may be wrong.
             html = `
                 <div class="bg-amber-50 border border-amber-200 rounded-lg p-3" role="status">
                     <div class="flex items-center gap-2">
-                        <span class="text-amber-600 font-bold">&#9888;</span>
-                        <span class="text-sm font-medium text-amber-900">We couldn't confirm this is a ${escapeHtml(docLabel(docType))}</span>
+                        <span class="text-green-600 font-bold">&#10003;</span>
+                        <span class="text-sm font-medium text-gray-800">Document uploaded</span>
                     </div>
-                    ${v.message ? `<p class="text-xs text-amber-800 mt-1">${escapeHtml(v.message)}</p>` : ''}
-                    <p class="text-xs text-amber-800 mt-2">Automated checks can occasionally get this wrong. If you're sure this is the right document, you can continue &mdash; the course team will review it. Otherwise, please upload a different file.</p>
-                </div>`;
-        }
-
-        // Name match warning
-        if (v.name_match && v.name_match.match_status === 'NO_MATCH') {
-            html += `
-                <div class="bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
-                    <p class="text-xs text-amber-700"><strong>Name Mismatch:</strong> ${escapeHtml(v.name_match.message || 'Name not found in document.')}</p>
-                </div>`;
-        } else if (v.name_match && v.name_match.match_status === 'PARTIAL') {
-            html += `
-                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-2 mt-2">
-                    <p class="text-xs text-yellow-700"><strong>Partial Match:</strong> ${escapeHtml(v.name_match.message || '')}</p>
-                </div>`;
-        }
-
-        // Celebrity warning
-        if (v.celebrity_warning && v.celebrity_warning.detected) {
-            html += `
-                <div class="bg-orange-50 border border-orange-200 rounded-lg p-2 mt-2">
-                    <p class="text-xs text-orange-700"><strong>Celebrity Detected:</strong> This photo resembles ${escapeHtml(v.celebrity_warning.celebrity_name || 'a known celebrity')}.</p>
+                    <p class="text-xs text-amber-900 mt-1">Our automatic check couldn't confirm this is a ${escapeHtml(docLabel(docType))}. This check is only to help the course team and often gets it wrong. <strong>If this is the correct document, please ignore this message and submit.</strong></p>
                 </div>`;
         }
 
@@ -308,11 +285,7 @@
         } else if (!docsUploaded) {
             hint.textContent = missingHint;
         } else if (unverified > 0) {
-            hint.textContent = unverified === 1
-                ? "1 document couldn't be verified automatically. You can still submit; the course team will review it."
-                : `${unverified} documents couldn't be verified automatically. You can still submit; the course team will review them.`;
-            hint.classList.remove('text-gray-400');
-            hint.classList.add('text-amber-700');
+            hint.textContent = 'You can submit now. Document check messages are only for the course team.';
         } else {
             hint.textContent = '';
         }
