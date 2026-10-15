@@ -512,7 +512,7 @@ def save_submission(course_id, email, form_data, doc_results):
             )
             sid = cur.fetchone()["id"]
         conn.commit()
-        logger.info(f"Saved submission id={sid} for course_id={course_id}, email={email}")
+        logger.info(f"Saved submission id={sid} for course_id={course_id}")
         return sid
     finally:
         conn.close()

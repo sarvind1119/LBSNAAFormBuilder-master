@@ -183,10 +183,12 @@
                                 <div class="mb-2">
                                     {% set file_ext = file_val.rsplit('.', 1)[-1].lower() if '.' in file_val else '' %}
                                     {% if file_ext in ('jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp') %}
-                                    <img src="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}"
+                                    {# Loaded when the row is expanded; ?v= changes when the file is replaced so caching is safe. #}
+                                    {% set preview_url = url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type, v=file_val|file_version(result)) %}
+                                    <img data-src="{{ preview_url }}"
                                          alt="{{ doc.label }}"
-                                         class="w-20 h-20 object-cover rounded border cursor-pointer hover:opacity-80 transition doc-thumbnail"
-                                         data-full-src="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}"
+                                         class="w-20 h-20 object-cover rounded border bg-gray-100 cursor-pointer hover:opacity-80 transition doc-thumbnail"
+                                         data-full-src="{{ preview_url }}"
                                          data-doc-label="{{ doc.label }} - Submission #{{ sub.id }}"
                                          onclick="event.stopPropagation(); openImageModal(this.dataset.fullSrc, this.dataset.docLabel)">
                                     {% else %}
@@ -469,6 +471,10 @@ document.querySelectorAll('.submission-row').forEach(row => {
         const id = row.dataset.id;
         const detail = document.getElementById('detail-' + id);
         detail.classList.toggle('hidden');
+        detail.querySelectorAll('img[data-src]').forEach(img => {
+            img.src = img.dataset.src;
+            img.removeAttribute('data-src');
+        });
     });
 });
 

@@ -82,7 +82,7 @@ def send_notification_email(to_email, course_name, submission_id, doc_label,
             server.login(config['username'], config['password'])
         server.send_message(msg)
 
-    logger.info(f"Sent notification email to {to_email} for submission #{submission_id}")
+    logger.info(f"Sent notification email for submission #{submission_id}")
     return True
 
 

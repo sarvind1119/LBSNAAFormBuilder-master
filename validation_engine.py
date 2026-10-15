@@ -214,10 +214,10 @@ def _extract_name_candidates_from_text(text: str, max_words: int = 4) -> list:
 
 def extract_name_from_text(text: str, user_name: str, document_type: str = "document") -> Dict[str, str]:
     """Extract and match name from OCR text with enhanced variant matching."""
-    logger.info(f"[DEBUG] extract_name_from_text called: user_name='{user_name}', document_type='{document_type}', text_length={len(text) if text else 0}")
+    logger.debug(f"extract_name_from_text called: user_name='{user_name}', document_type='{document_type}', text_length={len(text) if text else 0}")
 
     if not text or not user_name:
-        logger.info(f"[DEBUG] Returning NO_DATA: text={'empty' if not text else 'present'}, user_name={'empty' if not user_name else 'present'}")
+        logger.debug(f"Returning NO_DATA: text={'empty' if not text else 'present'}, user_name={'empty' if not user_name else 'present'}")
         return {"match_status": "NO_DATA", "message": "No text or name provided"}
 
     # Map document types to user-friendly names for display messages
@@ -240,13 +240,13 @@ def extract_name_from_text(text: str, user_name: str, document_type: str = "docu
     # === TIER 1: Exact full-name substring match ===
     if name_lower in text_lower:
         result = {"match_status": "MATCH", "message": f"Name verified in {doc_type_name}"}
-        logger.info(f"[DEBUG] Exact match found! Returning: {result}")
+        logger.debug(f"Exact match found! Returning: {result}")
         return result
 
     # === TIER 2: All significant words present (order-independent) ===
     if len(significant_words) > 1 and all(word in text_lower for word in significant_words):
         result = {"match_status": "MATCH", "message": f"Name verified in {doc_type_name}"}
-        logger.info(f"[DEBUG] Word-level match found! Returning: {result}")
+        logger.debug(f"Word-level match found! Returning: {result}")
         return result
 
     # === TIER 3: Variant matching (initials, abbreviations, reversed order) ===
@@ -259,7 +259,7 @@ def extract_name_from_text(text: str, user_name: str, document_type: str = "docu
     for variant in multi_word_variants:
         if variant in text_lower or variant in text_candidates:
             result = {"match_status": "MATCH", "message": f"Name verified in {doc_type_name}"}
-            logger.info(f"[DEBUG] Variant match: '{variant}'. Returning: {result}")
+            logger.debug(f"Variant match: '{variant}'. Returning: {result}")
             return result
 
     # === TIER 4: Fuzzy matching on variants and individual words ===
@@ -271,7 +271,7 @@ def extract_name_from_text(text: str, user_name: str, document_type: str = "docu
                                              cutoff=NAME_MATCH_THRESHOLD)
         if matches:
             result = {"match_status": "MATCH", "message": f"Name verified in {doc_type_name}"}
-            logger.info(f"[DEBUG] Fuzzy variant match: '{variant}' ~ '{matches[0]}'. Returning: {result}")
+            logger.debug(f"Fuzzy variant match: '{variant}' ~ '{matches[0]}'. Returning: {result}")
             return result
 
     # Fuzzy match individual significant words
@@ -296,7 +296,7 @@ def extract_name_from_text(text: str, user_name: str, document_type: str = "docu
             return {"match_status": "PARTIAL", "message": f"Name partially verified in {doc_type_name}"}
 
     result = {"match_status": "NO_MATCH", "message": f"Name not found in {doc_type_name}"}
-    logger.info(f"[DEBUG] No match found. Returning: {result}")
+    logger.debug(f"No match found. Returning: {result}")
     return result
 
 
@@ -835,12 +835,12 @@ def validate_document(
 
                 # Perform name matching if name provided
                 if user_name:
-                    logger.info(f"[DEBUG] Calling extract_name_from_text with user_name='{user_name}', expected_type='{expected_type}'")
+                    logger.debug(f"Calling extract_name_from_text with user_name='{user_name}', expected_type='{expected_type}'")
                     name_match = extract_name_from_text(ocr_text, user_name, expected_type)
-                    logger.info(f"[DEBUG] extract_name_from_text returned: {name_match}")
+                    logger.debug(f"extract_name_from_text returned: {name_match}")
                     result["name_match"] = name_match
                 else:
-                    logger.info(f"[DEBUG] Skipping name matching - no user_name provided")
+                    logger.debug(f"Skipping name matching - no user_name provided")
             except Exception as e:
                 logger.error(f"OCR extraction failed: {e}")
                 result["ocr_text"] = ""

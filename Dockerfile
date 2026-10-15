@@ -50,4 +50,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Production server (Flask's built-in server is for local development only).
 # One worker so models are loaded once and the in-memory rate limiter stays consistent.
-CMD exec gunicorn -w 1 --threads 4 --timeout 180 -b 0.0.0.0:${PORT:-5000} wsgi:app
+# 16 threads keep light requests responsive; heavy validations are capped in app.py
+# (VALIDATION_CONCURRENCY, default 3).
+CMD exec gunicorn -w 1 --threads 16 --timeout 180 -b 0.0.0.0:${PORT:-5000} wsgi:app

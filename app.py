@@ -10,7 +10,9 @@ import csv
 import re
 import json
 import logging
+import hashlib
 import tempfile
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -60,6 +62,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+# The Azure SDK logs every HTTP request and its headers at INFO; keep only problems.
+logging.getLogger('azure').setLevel(logging.WARNING)
 
 IS_DEVELOPMENT = os.environ.get('FLASK_ENV', 'production') == 'development'
 MIN_PASSWORD_LENGTH = 8
@@ -217,6 +221,7 @@ def _validation_payload(result):
         'extraction_method': result.get('extraction_method', 'NONE'),
         'keywords_found': result.get('keywords_found', []),
         'celebrity_warning': result.get('celebrity_warning', None),
+        'checked_at': result.get('checked_at'),
     }
 
 
@@ -236,6 +241,26 @@ def deadline_passed(deadline, now=None):
     else:
         expires = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     return now >= expires
+
+
+# Validation is CPU- and memory-heavy (PDF rendering, OCR, face matching).
+# Cap how many run at once so a burst of uploads cannot exhaust the server,
+# while lighter requests (pages, previews, health checks) keep flowing.
+_validation_slots = threading.BoundedSemaphore(int(os.environ.get('VALIDATION_CONCURRENCY', '3')))
+
+
+def run_validation(image_path, doc_type, user_name):
+    """Run the document validation pipeline under the concurrency cap."""
+    with _validation_slots:
+        result = validate_document(
+            image_path=image_path,
+            expected_type=doc_type,
+            ml_model=ModelManager.get_ml_model(),
+            outlier_model=ModelManager.get_outlier_model(),
+            user_name=user_name,
+        )
+    result['checked_at'] = datetime.now(timezone.utc).isoformat()
+    return result
 
 
 def require_models(f):
@@ -378,15 +403,7 @@ def validate(doc_type):
         return jsonify({'status': 'error', 'message': 'Failed to save file'}), 500
 
     try:
-        ml_model = ModelManager.get_ml_model()
-        outlier_model = ModelManager.get_outlier_model()
-        result = validate_document(
-            image_path=temp_filepath,
-            expected_type=doc_type,
-            ml_model=ml_model,
-            outlier_model=outlier_model,
-            user_name=user_name
-        )
+        result = run_validation(temp_filepath, doc_type, user_name)
 
         payload = _validation_payload(result)
 
@@ -775,12 +792,24 @@ def admin_download_file(submission_id, doc_type):
         abort(404)
 
     download = request.args.get('download', '0') == '1'
-    return send_file(
+    response = send_file(
         io.BytesIO(data),
         mimetype=content_type_for(file_key),
         as_attachment=download,
         download_name=Path(file_key).name,
     )
+    # Versioned preview URLs (see file_version) never change content, so the
+    # browser can keep them instead of re-downloading through the app.
+    if request.args.get('v'):
+        response.headers['Cache-Control'] = 'private, max-age=86400'
+    return response
+
+
+@app.template_filter('file_version')
+def file_version(file_key, result):
+    """Short tag that changes whenever a document's file or verdict changes."""
+    payload = json.dumps([file_key, result], sort_keys=True, default=str)
+    return hashlib.sha1(payload.encode('utf-8')).hexdigest()[:10]
 
 
 # ============================================================================
@@ -919,15 +948,7 @@ def admin_replace_doc(submission_id, doc_type):
 
     try:
         user_name = (sub.get('form_data') or {}).get('name', '')
-        ml_model = ModelManager.get_ml_model()
-        outlier_model = ModelManager.get_outlier_model()
-        result = validate_document(
-            image_path=temp_filepath,
-            expected_type=doc_type,
-            ml_model=ml_model,
-            outlier_model=outlier_model,
-            user_name=user_name
-        )
+        result = run_validation(temp_filepath, doc_type, user_name)
 
         storage = get_storage()
         new_file_key = storage.replace_file(
@@ -1125,15 +1146,7 @@ def reupload_document(token):
 
     try:
         # Validate through ML pipeline
-        ml_model = ModelManager.get_ml_model()
-        outlier_model = ModelManager.get_outlier_model()
-        result = validate_document(
-            image_path=temp_filepath,
-            expected_type=doc_type,
-            ml_model=ml_model,
-            outlier_model=outlier_model,
-            user_name=user_name
-        )
+        result = run_validation(temp_filepath, doc_type, user_name)
 
         # Save file permanently (replace old one)
         storage = get_storage()

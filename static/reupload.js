@@ -108,6 +108,7 @@
         const resultType = validation.result || '';
         const message = validation.message || '';
 
+        const unreadable = resultType === 'BLANK' || resultType === 'ERROR';
         let bgClass, textClass, icon, title;
 
         if (isValid) {
@@ -115,11 +116,16 @@
             textClass = 'text-green-700';
             icon = '<svg class="w-6 h-6 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
             title = 'Document Accepted';
-        } else {
+        } else if (unreadable) {
             bgClass = 'bg-red-50 border border-red-200';
             textClass = 'text-red-700';
             icon = '<svg class="w-6 h-6 text-red-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
-            title = 'Document Rejected';
+            title = resultType === 'BLANK' ? 'This file looks blank' : "We couldn't read this file";
+        } else {
+            bgClass = 'bg-amber-50 border border-amber-200';
+            textClass = 'text-amber-900';
+            icon = '<svg class="w-6 h-6 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>';
+            title = `Document received, but we couldn't verify it automatically`;
         }
 
         let html = `
@@ -127,7 +133,7 @@
                 ${icon}
                 <div>
                     <p class="font-semibold ${textClass}">${title}</p>
-                    <p class="text-sm text-gray-600 mt-1">${escapeHtml(message)}</p>
+                    ${unreadable ? '' : `<p class="text-sm text-gray-600 mt-1">${escapeHtml(message)}</p>`}
                     ${confidence ? `<p class="text-xs text-gray-500 mt-1">Confidence: ${confidence}</p>` : ''}
                     <p class="text-xs text-gray-400 mt-1">File: ${escapeHtml(filename)}</p>
                 </div>
@@ -156,11 +162,12 @@
                     `Your ${DOC_LABEL} has been re-uploaded and validated successfully (${confidence} confidence).`;
             }, 2000);
         } else {
-            // For rejected, the token is already used. Show message.
+            // The re-upload link is single-use, so explain what happens next.
+            const nextStep = unreadable
+                ? 'This re-upload link has now been used. Please contact the course team so they can send you a new link.'
+                : "Automated checks can occasionally get this wrong. Your document has been saved and the course team will review it; they will contact you if anything else is needed.";
             validationResult.innerHTML += `
-                <p class="text-sm text-gray-600 mt-3 border-t pt-3">
-                    The document was re-uploaded but did not pass validation. Please contact the administrator for further assistance.
-                </p>`;
+                <p class="text-sm text-gray-600 mt-3 border-t pt-3">${nextStep}</p>`;
         }
     }
 
